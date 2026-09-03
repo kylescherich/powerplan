@@ -1,0 +1,49 @@
+{
+  "sites": [
+    {
+      "site_id": "SITE-TX",
+      "region": "us-central",
+      "power_capacity_kw": 4200,
+      "baseline_load_kw": 900,
+      "pue": 1.28,
+      "price_per_kwh": 0.061,
+      "carbon_g_per_kwh": 396,
+      "pools": [
+        {"pool_id": "tx-h100", "accelerator": "H100-SXM", "total": 512, "available": 512,
+         "tdp_watts": 700, "memory_gb": 80, "perf": 1.0, "utilization": 0.88},
+        {"pool_id": "tx-a100", "accelerator": "A100-80", "total": 256, "available": 256,
+         "tdp_watts": 400, "memory_gb": 80, "perf": 0.55, "utilization": 0.85}
+      ]
+    },
+    {
+      "site_id": "SITE-OR",
+      "region": "us-west",
+      "power_capacity_kw": 2600,
+      "baseline_load_kw": 500,
+      "pue": 1.15,
+      "price_per_kwh": 0.084,
+      "carbon_g_per_kwh": 121,
+      "pools": [
+        {"pool_id": "or-h100", "accelerator": "H100-SXM", "total": 320, "available": 320,
+         "tdp_watts": 700, "memory_gb": 80, "perf": 1.0, "utilization": 0.88},
+        {"pool_id": "or-mi300", "accelerator": "MI300X", "total": 128, "available": 128,
+         "tdp_watts": 750, "memory_gb": 192, "perf": 0.95, "utilization": 0.86}
+      ]
+    },
+    {
+      "site_id": "SITE-EU",
+      "region": "eu-central",
+      "power_capacity_kw": 1800,
+      "baseline_load_kw": 420,
+      "pue": 1.21,
+      "price_per_kwh": 0.147,
+      "carbon_g_per_kwh": 268,
+      "pools": [
+        {"pool_id": "eu-h100", "accelerator": "H100-SXM", "total": 192, "available": 192,
+         "tdp_watts": 700, "memory_gb": 80, "perf": 1.0, "utilization": 0.87},
+        {"pool_id": "eu-l40s", "accelerator": "L40S", "total": 224, "available": 224,
+         "tdp_watts": 350, "memory_gb": 48, "perf": 0.32, "utilization": 0.8}
+      ]
+    }
+  ]
+}

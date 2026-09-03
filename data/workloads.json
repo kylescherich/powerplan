@@ -1,0 +1,17 @@
+{
+  "workloads": [
+    {"workload_id": "W-001", "name": "foundation-pretrain-7b", "gpu_count": 256,
+     "ref_hours": 62, "min_memory_gb": 80, "priority": 1, "deadline_hours": 96},
+    {"workload_id": "W-002", "name": "eu-customer-finetune", "gpu_count": 64,
+     "ref_hours": 14, "min_memory_gb": 48, "priority": 2, "deadline_hours": 24,
+     "allowed_regions": ["eu-central"]},
+    {"workload_id": "W-003", "name": "nightly-eval-sweep", "gpu_count": 48,
+     "ref_hours": 6, "min_memory_gb": 40, "priority": 4, "interruptible": true},
+    {"workload_id": "W-004", "name": "long-context-rlhf", "gpu_count": 96,
+     "ref_hours": 30, "min_memory_gb": 140, "priority": 2},
+    {"workload_id": "W-005", "name": "batch-inference-backfill", "gpu_count": 120,
+     "ref_hours": 9, "min_memory_gb": 40, "priority": 5, "interruptible": true},
+    {"workload_id": "W-006", "name": "safety-classifier-train", "gpu_count": 32,
+     "ref_hours": 11, "min_memory_gb": 40, "priority": 3, "deadline_hours": 20}
+  ]
+}
