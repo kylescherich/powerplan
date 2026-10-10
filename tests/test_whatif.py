@@ -18,33 +18,36 @@ def test_site_offline_returns_new_fleet():
     original = load_fleet("data/fleet.json")
     original_sites_count = len(original.sites)
     original_first_site_id = original.sites[0].site_id
+    original_first_site_online = original.sites[0].online
     
     modified = site_offline(original, original_first_site_id)
     
     # Original should be unchanged
     assert len(original.sites) == original_sites_count
     assert original.sites[0].site_id == original_first_site_id
+    assert original.sites[0].online == original_first_site_online
     
     # Modified should be different
     assert modified is not original
-    assert len(modified.sites) < len(original.sites)
+    modified_site = modified.site(original_first_site_id)
+    assert modified_site.online == False
 
 
 def test_curtail_returns_new_fleet():
     """curtail should return a new fleet and leave the input untouched."""
     original = load_fleet("data/fleet.json")
     site_id = original.sites[0].site_id
-    original_capacity = original.sites[0].capacity_kw
+    original_capacity = original.sites[0].power_capacity_kw
     
     modified = curtail(original, site_id, 0.5)
     
     # Original should be unchanged
-    assert original.sites[0].capacity_kw == original_capacity
+    assert original.sites[0].power_capacity_kw == original_capacity
     
     # Modified should be different
     assert modified is not original
     modified_site = modified.site(site_id)
-    assert modified_site.capacity_kw == original_capacity * 0.5
+    assert modified_site.power_capacity_kw == original_capacity * 0.5
 
 
 def test_pool_degraded_returns_new_fleet():
@@ -52,17 +55,17 @@ def test_pool_degraded_returns_new_fleet():
     original = load_fleet("data/fleet.json")
     site_id = original.sites[0].site_id
     pool_id = original.sites[0].pools[0].pool_id
-    original_count = original.sites[0].pools[0].count
+    original_total = original.sites[0].pools[0].total
     
     modified = pool_degraded(original, site_id, pool_id, 1)
     
     # Original should be unchanged
-    assert original.site(site_id).pool(pool_id).count == original_count
+    assert original.site(site_id).pool(pool_id).total == original_total
     
     # Modified should be different
     assert modified is not original
     modified_pool = modified.site(site_id).pool(pool_id)
-    assert modified_pool.count == original_count - 1
+    assert modified_pool.total == original_total - 1
 
 
 def test_price_spike_returns_new_fleet():
@@ -114,11 +117,15 @@ def test_run_scenario_on_data_files():
     # Create a perturbed fleet
     perturbed = site_offline(fleet, fleet.sites[0].site_id)
     
-    # Run scenario should return a diff string
+    # Run scenario should return a tuple of (baseline_plan, scenario_plan)
     result = run_scenario(fleet, workloads, perturbed)
     
-    assert isinstance(result, str)
-    assert len(result) > 0
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    # Both should be Plan objects
+    from powerplan.engine import Plan
+    assert isinstance(result[0], Plan)
+    assert isinstance(result[1], Plan)
 
 
 def test_run_scenario_with_weights():
@@ -128,7 +135,8 @@ def test_run_scenario_with_weights():
     
     perturbed = curtail(fleet, fleet.sites[0].site_id, 0.8)
     
-    weights = {"cost": 0.5, "carbon": 0.5}
+    weights = {"cost": 0.5, "carbon": 0.3, "runtime": 0.2}
     result = run_scenario(fleet, workloads, perturbed, weights=weights)
     
-    assert isinstance(result, str)
+    assert isinstance(result, tuple)
+    assert len(result) == 2
