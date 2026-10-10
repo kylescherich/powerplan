@@ -18,6 +18,7 @@ def test_explain_mentions_chosen_site():
         pool_id="h100",
         accelerator="H100",
         runtime_hours=2.0,
+        it_kw=40.0,
         facility_kw=50.0,
         energy_kwh=100.0,
         cost_usd=200.0,
@@ -47,6 +48,7 @@ def test_explain_mentions_every_reject_reason():
         pool_id="h100",
         accelerator="H100",
         runtime_hours=2.0,
+        it_kw=40.0,
         facility_kw=50.0,
         energy_kwh=100.0,
         cost_usd=200.0,
@@ -86,6 +88,7 @@ def test_explain_shows_runner_up_comparison():
         pool_id="h100",
         accelerator="H100",
         runtime_hours=2.0,
+        it_kw=40.0,
         facility_kw=50.0,
         energy_kwh=100.0,
         cost_usd=200.0,
@@ -99,6 +102,7 @@ def test_explain_shows_runner_up_comparison():
         pool_id="a100",
         accelerator="A100",
         runtime_hours=2.5,
+        it_kw=50.0,
         facility_kw=60.0,
         energy_kwh=150.0,
         cost_usd=250.0,
@@ -128,6 +132,7 @@ def test_summarise_counts_match_plan():
         pool_id="h100",
         accelerator="H100",
         runtime_hours=2.0,
+        it_kw=40.0,
         facility_kw=50.0,
         energy_kwh=100.0,
         cost_usd=200.0,
@@ -141,6 +146,7 @@ def test_summarise_counts_match_plan():
         pool_id="a100",
         accelerator="A100",
         runtime_hours=3.0,
+        it_kw=50.0,
         facility_kw=60.0,
         energy_kwh=180.0,
         cost_usd=300.0,
@@ -187,22 +193,22 @@ def test_fingerprint_stable_for_equal_input():
     pool = AcceleratorPool(
         pool_id="h100",
         accelerator="H100",
-        count=8,
+        total=8,
         available=8,
-        memory_gb=80,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
     )
     
     site = Site(
         site_id="us-west",
+        region="us-west",
         pools=[pool],
-        capacity_kw=100.0,
-        drawn_kw=0.0,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
         price_per_kwh=0.10,
         carbon_g_per_kwh=400.0,
-        allowed_residency=["us"],
     )
     
     fleet1 = Fleet(sites=[site])
@@ -221,43 +227,43 @@ def test_fingerprint_differs_for_different_input():
     pool1 = AcceleratorPool(
         pool_id="h100",
         accelerator="H100",
-        count=8,
+        total=8,
         available=8,
-        memory_gb=80,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
     )
     
     pool2 = AcceleratorPool(
         pool_id="a100",
         accelerator="A100",
-        count=8,
+        total=8,
         available=8,
-        memory_gb=40,
         tdp_watts=400,
+        memory_gb=40,
         perf=0.8,
     )
     
     site1 = Site(
         site_id="us-west",
+        region="us-west",
         pools=[pool1],
-        capacity_kw=100.0,
-        drawn_kw=0.0,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
         price_per_kwh=0.10,
         carbon_g_per_kwh=400.0,
-        allowed_residency=["us"],
     )
     
     site2 = Site(
         site_id="us-west",
+        region="us-west",
         pools=[pool2],
-        capacity_kw=100.0,
-        drawn_kw=0.0,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
         price_per_kwh=0.10,
         carbon_g_per_kwh=400.0,
-        allowed_residency=["us"],
     )
     
     fleet1 = Fleet(sites=[site1])
@@ -278,6 +284,7 @@ def test_audit_record_appends_valid_json_lines(tmp_path):
         pool_id="h100",
         accelerator="H100",
         runtime_hours=2.0,
+        it_kw=40.0,
         facility_kw=50.0,
         energy_kwh=100.0,
         cost_usd=200.0,
@@ -300,22 +307,22 @@ def test_audit_record_appends_valid_json_lines(tmp_path):
     pool = AcceleratorPool(
         pool_id="h100",
         accelerator="H100",
-        count=8,
+        total=8,
         available=8,
-        memory_gb=80,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
     )
     
     site = Site(
         site_id="us-west",
+        region="us-west",
         pools=[pool],
-        capacity_kw=100.0,
-        drawn_kw=0.0,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
         price_per_kwh=0.10,
         carbon_g_per_kwh=400.0,
-        allowed_residency=["us"],
     )
     
     fleet = Fleet(sites=[site])
@@ -324,9 +331,9 @@ def test_audit_record_appends_valid_json_lines(tmp_path):
         workload_id="w1",
         name="job1",
         gpu_count=1,
-        gpu_memory_gb=40,
         ref_hours=2.0,
-        residency=["us"],
+        min_memory_gb=40,
+        allowed_regions=["us-west"],
     )
     
     run_id = record(plan, fleet, [workload], path=audit_file)
@@ -356,6 +363,7 @@ def test_audit_record_never_rewrites_earlier_lines(tmp_path):
         pool_id="h100",
         accelerator="H100",
         runtime_hours=2.0,
+        it_kw=40.0,
         facility_kw=50.0,
         energy_kwh=100.0,
         cost_usd=200.0,
@@ -378,22 +386,22 @@ def test_audit_record_never_rewrites_earlier_lines(tmp_path):
     pool = AcceleratorPool(
         pool_id="h100",
         accelerator="H100",
-        count=8,
+        total=8,
         available=8,
-        memory_gb=80,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
     )
     
     site = Site(
         site_id="us-west",
+        region="us-west",
         pools=[pool],
-        capacity_kw=100.0,
-        drawn_kw=0.0,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
         price_per_kwh=0.10,
         carbon_g_per_kwh=400.0,
-        allowed_residency=["us"],
     )
     
     fleet = Fleet(sites=[site])
@@ -402,9 +410,9 @@ def test_audit_record_never_rewrites_earlier_lines(tmp_path):
         workload_id="w1",
         name="job1",
         gpu_count=1,
-        gpu_memory_gb=40,
         ref_hours=2.0,
-        residency=["us"],
+        min_memory_gb=40,
+        allowed_regions=["us-west"],
     )
     
     # First record
