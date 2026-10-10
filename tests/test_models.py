@@ -21,18 +21,18 @@ def test_accelerator_pool_draw_kw():
     pool = AcceleratorPool(
         pool_id="test_pool",
         accelerator="H100",
-        count=8,
+        total=8,
         available=8,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
-        vram_gb=80,
     )
     
-    # Test drawing power for 4 accelerators
-    assert pool.draw_kw(4) == 2.8  # 4 * 700W = 2800W = 2.8kW
+    # Test drawing power for 4 accelerators (with default utilization=0.85)
+    assert pool.draw_kw(4) == 2.38  # 4 * 700W * 0.85 = 2380W = 2.38kW
     
     # Test drawing power for all accelerators
-    assert pool.draw_kw(8) == 5.6  # 8 * 700W = 5600W = 5.6kW
+    assert pool.draw_kw(8) == 4.76  # 8 * 700W * 0.85 = 4760W = 4.76kW
     
     # Test drawing power for 0 accelerators
     assert pool.draw_kw(0) == 0.0
@@ -43,41 +43,40 @@ def test_site_headroom_kw():
     pool1 = AcceleratorPool(
         pool_id="pool1",
         accelerator="H100",
-        count=4,
+        total=4,
         available=4,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
-        vram_gb=80,
     )
     pool2 = AcceleratorPool(
         pool_id="pool2",
         accelerator="A100",
-        count=8,
+        total=8,
         available=8,
         tdp_watts=400,
+        memory_gb=40,
         perf=0.8,
-        vram_gb=40,
     )
     
     site = Site(
         site_id="test_site",
         region="us-west",
-        carbon_g_kwh=200,
-        price_usd_kwh=0.10,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
-        limit_kw=100.0,
+        price_per_kwh=0.10,
+        carbon_g_per_kwh=200,
         pools=[pool1, pool2],
     )
     
-    # Initially, no power is allocated
+    # Initially, no power is committed
     assert site.headroom_kw == 100.0
     
-    # Allocate some accelerators
-    pool1.available = 2  # 2 H100s in use = 1.4kW IT load
-    pool2.available = 4  # 4 A100s in use = 1.6kW IT load
-    # Total IT load = 3.0kW, facility load = 3.0 * 1.2 = 3.6kW
-    # Headroom = 100.0 - 3.6 = 96.4kW
-    assert site.headroom_kw == 96.4
+    # Commit some power
+    site.committed_kw = 10.0
+    # Headroom = 100.0 - 0.0 (baseline) - 10.0 (committed) = 90.0kW
+    assert site.headroom_kw == 90.0
 
 
 def test_site_facility_kw():
@@ -85,10 +84,11 @@ def test_site_facility_kw():
     site = Site(
         site_id="test_site",
         region="us-west",
-        carbon_g_kwh=200,
-        price_usd_kwh=0.10,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.5,
-        limit_kw=100.0,
+        price_per_kwh=0.10,
+        carbon_g_per_kwh=200,
         pools=[],
     )
     
@@ -103,29 +103,30 @@ def test_site_pool():
     pool1 = AcceleratorPool(
         pool_id="h100_pool",
         accelerator="H100",
-        count=4,
+        total=4,
         available=4,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
-        vram_gb=80,
     )
     pool2 = AcceleratorPool(
         pool_id="a100_pool",
         accelerator="A100",
-        count=8,
+        total=8,
         available=8,
         tdp_watts=400,
+        memory_gb=40,
         perf=0.8,
-        vram_gb=40,
     )
     
     site = Site(
         site_id="test_site",
         region="us-west",
-        carbon_g_kwh=200,
-        price_usd_kwh=0.10,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
-        limit_kw=100.0,
+        price_per_kwh=0.10,
+        carbon_g_per_kwh=200,
         pools=[pool1, pool2],
     )
     
@@ -134,7 +135,7 @@ def test_site_pool():
     assert site.pool("a100_pool") == pool2
     
     # Test error on unknown pool ID
-    with pytest.raises(ValueError, match="Pool unknown_pool not found"):
+    with pytest.raises(KeyError):
         site.pool("unknown_pool")
 
 
@@ -142,21 +143,21 @@ def test_workload_runtime_hours():
     """Test Workload.runtime_hours scales by pool performance."""
     workload = Workload(
         workload_id="test_job",
+        name="test_workload",
         gpu_count=4,
-        vram_gb=40,
         ref_hours=10.0,
-        data_region="us-west",
+        min_memory_gb=40,
     )
     
     # Pool with perf=1.0 (reference performance)
     pool_ref = AcceleratorPool(
         pool_id="ref_pool",
         accelerator="H100",
-        count=8,
+        total=8,
         available=8,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
-        vram_gb=80,
     )
     assert workload.runtime_hours(pool_ref) == 10.0
     
@@ -164,11 +165,11 @@ def test_workload_runtime_hours():
     pool_fast = AcceleratorPool(
         pool_id="fast_pool",
         accelerator="H200",
-        count=8,
+        total=8,
         available=8,
         tdp_watts=800,
+        memory_gb=96,
         perf=2.0,
-        vram_gb=96,
     )
     assert workload.runtime_hours(pool_fast) == 5.0
     
@@ -176,11 +177,11 @@ def test_workload_runtime_hours():
     pool_slow = AcceleratorPool(
         pool_id="slow_pool",
         accelerator="V100",
-        count=8,
+        total=8,
         available=8,
         tdp_watts=300,
+        memory_gb=32,
         perf=0.5,
-        vram_gb=32,
     )
     assert workload.runtime_hours(pool_slow) == 20.0
 
@@ -190,19 +191,21 @@ def test_fleet_site():
     site1 = Site(
         site_id="site_a",
         region="us-west",
-        carbon_g_kwh=200,
-        price_usd_kwh=0.10,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
-        limit_kw=100.0,
+        price_per_kwh=0.10,
+        carbon_g_per_kwh=200,
         pools=[],
     )
     site2 = Site(
         site_id="site_b",
         region="us-east",
-        carbon_g_kwh=300,
-        price_usd_kwh=0.12,
+        power_capacity_kw=150.0,
+        baseline_load_kw=0.0,
         pue=1.3,
-        limit_kw=150.0,
+        price_per_kwh=0.12,
+        carbon_g_per_kwh=300,
         pools=[],
     )
     
@@ -213,7 +216,7 @@ def test_fleet_site():
     assert fleet.site("site_b") == site2
     
     # Test error on unknown site ID
-    with pytest.raises(ValueError, match="Site unknown_site not found"):
+    with pytest.raises(KeyError):
         fleet.site("unknown_site")
 
 
@@ -222,44 +225,47 @@ def test_fleet_reset():
     pool1 = AcceleratorPool(
         pool_id="pool1",
         accelerator="H100",
-        count=8,
+        total=8,
         available=4,  # Some in use
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
-        vram_gb=80,
     )
     pool2 = AcceleratorPool(
         pool_id="pool2",
         accelerator="A100",
-        count=16,
+        total=16,
         available=10,  # Some in use
         tdp_watts=400,
+        memory_gb=40,
         perf=0.8,
-        vram_gb=40,
     )
     
     site = Site(
         site_id="test_site",
         region="us-west",
-        carbon_g_kwh=200,
-        price_usd_kwh=0.10,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
-        limit_kw=100.0,
+        price_per_kwh=0.10,
+        carbon_g_per_kwh=200,
         pools=[pool1, pool2],
     )
     
     fleet = Fleet(sites=[site])
     
-    # Verify pools are partially allocated
+    # Verify pools are partially allocated and site has committed power
     assert pool1.available == 4
     assert pool2.available == 10
+    site.committed_kw = 50.0
     
     # Reset the fleet
     fleet.reset()
     
-    # Verify all pools are fully available
+    # Verify all pools are fully available and committed power is reset
     assert pool1.available == 8
     assert pool2.available == 16
+    assert site.committed_kw == 0.0
 
 
 def test_load_fleet_roundtrip():
@@ -284,10 +290,10 @@ def test_load_fleet_roundtrip():
     for site_dict in fleet_dict["sites"]:
         assert "site_id" in site_dict
         assert "region" in site_dict
-        assert "carbon_g_kwh" in site_dict
-        assert "price_usd_kwh" in site_dict
+        assert "carbon_g_per_kwh" in site_dict
+        assert "price_per_kwh" in site_dict
         assert "pue" in site_dict
-        assert "limit_kw" in site_dict
+        assert "power_capacity_kw" in site_dict
         assert "pools" in site_dict
 
 
@@ -311,10 +317,10 @@ def test_load_workloads_roundtrip():
     # Verify workloads have expected structure
     for workload_dict in workloads_list:
         assert "workload_id" in workload_dict
+        assert "name" in workload_dict
         assert "gpu_count" in workload_dict
-        assert "vram_gb" in workload_dict
         assert "ref_hours" in workload_dict
-        assert "data_region" in workload_dict
+        assert "min_memory_gb" in workload_dict
 
 
 def test_to_dict_with_nested_dataclasses():
@@ -322,20 +328,21 @@ def test_to_dict_with_nested_dataclasses():
     pool = AcceleratorPool(
         pool_id="test_pool",
         accelerator="H100",
-        count=8,
+        total=8,
         available=8,
         tdp_watts=700,
+        memory_gb=80,
         perf=1.0,
-        vram_gb=80,
     )
     
     site = Site(
         site_id="test_site",
         region="us-west",
-        carbon_g_kwh=200,
-        price_usd_kwh=0.10,
+        power_capacity_kw=100.0,
+        baseline_load_kw=0.0,
         pue=1.2,
-        limit_kw=100.0,
+        price_per_kwh=0.10,
+        carbon_g_per_kwh=200,
         pools=[pool],
     )
     
@@ -359,4 +366,4 @@ def test_to_dict_with_nested_dataclasses():
     pool_dict = site_dict["pools"][0]
     assert pool_dict["pool_id"] == "test_pool"
     assert pool_dict["accelerator"] == "H100"
-    assert pool_dict["count"] == 8
+    assert pool_dict["total"] == 8
