@@ -93,20 +93,50 @@ def test_diff_output_names_moved_workloads():
     # Create baseline plan
     baseline = plan(fleet, workloads)
     
-    # Create scenario with a site offline to force replanning
+    # Find a site that has at least one placement
+    site_with_placements = None
+    for site in fleet.sites:
+        placements_at_site = [p for p in baseline.placements if p.site_id == site.site_id]
+        if placements_at_site:
+            site_with_placements = site.site_id
+            break
+    
+    assert site_with_placements is not None, "No site has any placements in baseline plan"
+    
+    # Take that site offline and re-plan
     fleet.reset()
-    perturbed = site_offline(fleet, fleet.sites[0].site_id)
+    perturbed = site_offline(fleet, site_with_placements)
     scenario = plan(perturbed, workloads)
+    
+    # Find workloads that moved to different sites
+    moved_workloads = []
+    for baseline_placement in baseline.placements:
+        # Find the same workload in the scenario plan
+        scenario_placement = next(
+            (p for p in scenario.placements if p.workload_id == baseline_placement.workload_id),
+            None
+        )
+        if scenario_placement and scenario_placement.site_id != baseline_placement.site_id:
+            moved_workloads.append(baseline_placement.workload_id)
+    
+    # The test must fail if no workloads moved
+    assert len(moved_workloads) > 0, (
+        f"No workloads moved when site {site_with_placements} was taken offline. "
+        "This test requires at least one workload to move to validate diff() output."
+    )
     
     # Get diff output
     output = diff(baseline, scenario)
     
-    # Should be a string
+    # Should be a non-empty string
     assert isinstance(output, str)
+    assert len(output) > 0, "diff() output should not be empty when workloads moved"
     
-    # If workloads moved, their IDs should appear in the output
-    # (This test is lenient since we don't know if workloads will actually move)
-    assert len(output) >= 0
+    # Every moved workload should be named in the output
+    for workload_id in moved_workloads:
+        assert workload_id in output, (
+            f"Workload {workload_id} moved sites but is not mentioned in diff() output"
+        )
 
 
 def test_run_scenario_on_data_files():
