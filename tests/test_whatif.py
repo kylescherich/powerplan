@@ -96,7 +96,7 @@ def test_diff_output_names_moved_workloads():
     # Find a site that has at least one placement
     site_with_placements = None
     for site in fleet.sites:
-        placements_at_site = [p for p in baseline.placements if p.site_id == site.site_id]
+        placements_at_site = [p for p in baseline.placements if p.chosen.site_id == site.site_id]
         if placements_at_site:
             site_with_placements = site.site_id
             break
@@ -116,7 +116,7 @@ def test_diff_output_names_moved_workloads():
             (p for p in scenario.placements if p.workload_id == baseline_placement.workload_id),
             None
         )
-        if scenario_placement and scenario_placement.site_id != baseline_placement.site_id:
+        if scenario_placement and scenario_placement.chosen.site_id != baseline_placement.chosen.site_id:
             moved_workloads.append(baseline_placement.workload_id)
     
     # The test must fail if no workloads moved
