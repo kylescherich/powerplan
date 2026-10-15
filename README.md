@@ -21,9 +21,11 @@ pytest tests -q
 ## The model
 
 **Site** — power ceiling (kW), baseline load, PUE, $/kWh, gCO2e/kWh, region.
+Sites may optionally specify `price_curve` and `carbon_curve` (24 hourly values)
+instead of scalar pricing; if absent, the scalar is used as a flat curve.
 **AcceleratorPool** — count, TDP, HBM, throughput relative to a reference part.
 **Workload** — accelerator count, reference runtime, HBM floor, priority,
-deadline, data-residency allowlist.
+deadline, data-residency allowlist, interruptible flag.
 
 Power is modelled end to end, not as a proxy:
 
@@ -39,6 +41,11 @@ runtime     = ref_hours / pool.perf
 A placement is feasible only if the site is online, the region satisfies
 residency, the pool has enough free accelerators and enough HBM, the deadline is
 reachable at that pool's throughput, and `facility_kw ≤ site.headroom_kw`.
+
+Interruptible workloads may defer their start hour to minimise cost or carbon
+within their deadline window. Non-interruptible jobs start at hour zero. The
+plan output shows the chosen start hour and the integrated cost/carbon over the
+run window.
 
 ## The objective
 
@@ -59,12 +66,16 @@ winner accepted:
 
 ```
 nightly-eval-sweep (W-003) -> SITE-OR/or-h100 [H100-SXM]
+  start hour 0.0
   6.0h - 34kW facility - 204 kWh - $17 - 25 kg CO2e
   score cost 0.048 + carbon 0.000 + runtime 0.000 = 0.048
   beat SITE-TX/tx-h100: $3 more expensive, 65.2 kg CO2e cleaner, same runtime
   tradeoff accepted: costs $3 more.
   ruled out: SITE-OR/or-mi300 (needs 48 accelerators, 32 free)
 ```
+
+For interruptible workloads that defer to a cheaper or cleaner hour, the
+explanation quantifies what the deferral saved or cost.
 
 Infeasible options are reported with the binding constraint, which is usually
 more useful than the winner.
@@ -96,9 +107,9 @@ tests/                 constraint, sensitivity and audit tests
 
 ## Roadmap
 
-1. MILP / CP-SAT solver over the existing candidate list; report the greedy gap.
-2. Time-of-day price and carbon curves; defer interruptible jobs into cheap or
-   clean windows instead of running them immediately.
+1. ~~Time-of-day price and carbon curves; defer interruptible jobs into cheap or
+   clean windows instead of running them immediately.~~ **Done.**
+2. MILP / CP-SAT solver over the existing candidate list; report the greedy gap.
 3. OpenTelemetry spans per placement decision → real observability, not prints.
 4. Ingest live telemetry (DCGM power draw, utility demand-response signals)
    instead of static JSON.

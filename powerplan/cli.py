@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         "--degrade", metavar="SITE:POOL:N", help="N accelerators fail in a pool"
     )
     p_what.add_argument(
-        "--price", metavar="SITE:MULT", help="multiply a site's $/kWh"
+        "--price", metavar="SITE:MULT", help="multiply a site's price curve"
     )
 
     args = ap.parse_args(argv)

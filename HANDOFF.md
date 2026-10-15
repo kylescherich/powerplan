@@ -3,7 +3,7 @@
 Context for anyone (including future me, or a fresh Claude session) picking this
 up. The code says *what*. This says *why*, and what was deliberately left undone.
 
-Written at commit `eace555`. If this file contradicts the code, the code wins —
+Written at commit `[CURRENT]`. If this file contradicts the code, the code wins —
 but say so, because it means this went stale.
 
 ---
@@ -83,14 +83,14 @@ justify breaking this.
 
 ## What's deliberately unfinished
 
-**`Workload.interruptible` is declared and read by nothing.** This is the most
-visible loose end and the highest-value next change. It's a placeholder for
-time-of-day scheduling: sites currently have scalar `price_per_kwh` and
-`carbon_g_per_kwh`, so there is no notion of *when* a job runs, only where.
-Making it real means 24-hour price/carbon curves, choosing a start hour as well
-as a site, integrating cost across the run window, and letting interruptible
-jobs defer into cheap or clean hours while deadlines stay binding. That turns
-the tool from static placement into actual scheduling.
+**Time-of-day scheduling is basic.** Sites now support 24-hour `price_curve` and
+`carbon_curve` fields, and interruptible workloads defer their start hour to
+minimise cost or carbon within their deadline window. What is still not modelled:
+time-indexed power capacity (headroom is checked at placement time, not across
+the full schedule), mid-run preemption (a job holds its accelerators until
+completion), site-local time zones (all hours are UTC-relative), and sourced
+curve data (the sample curves are synthetic). Real utility tariffs and grid
+carbon APIs (WattTime, Electricity Maps) are the credibility upgrade.
 
 **The sample data is synthetic.** Prices, carbon intensities and PUEs are
 plausible, not sourced. Real utility tariffs and WattTime/Electricity Maps
@@ -125,7 +125,8 @@ it's meant to demonstrate.
 
 ## Roadmap, in the order I'd do it
 
-1. Time-of-day price and carbon curves; make `interruptible` mean something.
+1. ~~Time-of-day price and carbon curves; make `interruptible` mean something.~~
+   **Done.**
 2. MILP or CP-SAT over the existing candidate list; report the greedy gap
    explicitly rather than quietly replacing the number.
 3. OpenTelemetry spans per decision.

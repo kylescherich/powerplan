@@ -43,9 +43,25 @@ class Site:
     carbon_g_per_kwh: float       # grid intensity for the planning window
     pools: list[AcceleratorPool] = field(default_factory=list)
     online: bool = True
+    price_curve: list[float] | None = None
+    carbon_curve: list[float] | None = None
 
     # --- mutable planning state -------------------------------------------
     committed_kw: float = 0.0
+
+    def __post_init__(self):
+        """Validate curve fields if present."""
+        if self.price_curve is not None:
+            if len(self.price_curve) != 24:
+                raise ValueError(f"price_curve must have exactly 24 values, got {len(self.price_curve)}")
+            if any(v < 0 for v in self.price_curve):
+                raise ValueError("price_curve values must be non-negative")
+        
+        if self.carbon_curve is not None:
+            if len(self.carbon_curve) != 24:
+                raise ValueError(f"carbon_curve must have exactly 24 values, got {len(self.carbon_curve)}")
+            if any(v < 0 for v in self.carbon_curve):
+                raise ValueError("carbon_curve values must be non-negative")
 
     @property
     def headroom_kw(self) -> float:
@@ -56,6 +72,20 @@ class Site:
 
     def facility_kw(self, it_kw: float) -> float:
         return it_kw * self.pue
+
+    def price_at(self, hour: float) -> float:
+        """Return price at the given hour (uses curve if available, else scalar)."""
+        if self.price_curve is None:
+            return self.price_per_kwh
+        index = int(hour) % 24
+        return self.price_curve[index]
+
+    def carbon_at(self, hour: float) -> float:
+        """Return carbon intensity at the given hour (uses curve if available, else scalar)."""
+        if self.carbon_curve is None:
+            return self.carbon_g_per_kwh
+        index = int(hour) % 24
+        return self.carbon_curve[index]
 
     def pool(self, pool_id: str) -> AcceleratorPool:
         for p in self.pools:
