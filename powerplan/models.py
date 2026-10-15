@@ -53,15 +53,15 @@ class Site:
         """Validate curve fields if present."""
         if self.price_curve is not None:
             if len(self.price_curve) != 24:
-                raise ValueError(f"price_curve must have exactly 24 values, got {len(self.price_curve)}")
+                raise ValueError(f"{self.site_id}: price_curve must have exactly 24 values, got {len(self.price_curve)}")
             if any(v < 0 for v in self.price_curve):
-                raise ValueError("price_curve values must be non-negative")
+                raise ValueError(f"{self.site_id}: price_curve values must be non-negative")
         
         if self.carbon_curve is not None:
             if len(self.carbon_curve) != 24:
-                raise ValueError(f"carbon_curve must have exactly 24 values, got {len(self.carbon_curve)}")
+                raise ValueError(f"{self.site_id}: carbon_curve must have exactly 24 values, got {len(self.carbon_curve)}")
             if any(v < 0 for v in self.carbon_curve):
-                raise ValueError("carbon_curve values must be non-negative")
+                raise ValueError(f"{self.site_id}: carbon_curve values must be non-negative")
 
     @property
     def headroom_kw(self) -> float:
