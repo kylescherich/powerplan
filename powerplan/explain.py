@@ -45,6 +45,32 @@ def explain(p: Placement) -> str:
 
     lines = [head, facts, weights]
 
+    # Add start hour information if deferred
+    if c.start_hour > 0:
+        cost_saved = c.deferral_saved_usd
+        carbon_saved = c.deferral_saved_kg
+        
+        if cost_saved >= 0 and carbon_saved >= 0:
+            lines.append(
+                f"  starts at hour {c.start_hour:.0f} (UTC); "
+                f"deferring saved ${cost_saved:,.0f} and {carbon_saved:,.0f} kg CO2e"
+            )
+        elif cost_saved >= 0 and carbon_saved < 0:
+            lines.append(
+                f"  starts at hour {c.start_hour:.0f} (UTC); "
+                f"deferring saved ${cost_saved:,.0f} but emits {-carbon_saved:,.0f} kg more"
+            )
+        elif cost_saved < 0 and carbon_saved >= 0:
+            lines.append(
+                f"  starts at hour {c.start_hour:.0f} (UTC); "
+                f"deferring cost ${-cost_saved:,.0f} more but saved {carbon_saved:,.0f} kg CO2e"
+            )
+        else:
+            lines.append(
+                f"  starts at hour {c.start_hour:.0f} (UTC); "
+                f"deferring cost ${-cost_saved:,.0f} more and emits {-carbon_saved:,.0f} kg more"
+            )
+
     r: Candidate | None = p.runner_up
     if r is None:
         lines.append("  only feasible candidate.")
@@ -76,6 +102,8 @@ def explain(p: Placement) -> str:
 
 
 def summarise(plan: Plan) -> str:
+    deferred_count = sum(1 for p in plan.placements if p.chosen.start_hour > 0)
+    
     lines = [
         f"placed {len(plan.placements)} workload(s), "
         f"{len(plan.unplaced)} unplaced",
@@ -83,6 +111,7 @@ def summarise(plan: Plan) -> str:
         f"total energy    {plan.total_energy_kwh:,.0f} kWh",
         f"total carbon    {plan.total_carbon_kg:,.0f} kg CO2e",
         f"makespan        {plan.makespan_hours:.1f} h",
+        f"deferred        {deferred_count} workload(s)",
     ]
     for wid, rejections in plan.unplaced:
         why = "; ".join(f"{r.site_id}/{r.pool_id}: {r.reason}" for r in rejections[:3])
