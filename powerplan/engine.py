@@ -34,11 +34,11 @@ class Candidate:
     energy_kwh: float
     cost_usd: float
     carbon_kg: float
-    start_hour: float = 0.0
-    deferral_saved_usd: float = 0.0
-    deferral_saved_kg: float = 0.0
     score: float = 0.0
     components: dict = field(default_factory=dict)
+    start_hour: int = 0
+    deferral_saved_usd: float = 0.0
+    deferral_saved_kg: float = 0.0
 
 
 @dataclass
@@ -136,7 +136,7 @@ def _build_candidate(
             energy_kwh=energy,
             cost_usd=energy * site.price_per_kwh,
             carbon_kg=energy * site.carbon_g_per_kwh / 1000.0,
-            start_hour=0.0,
+            start_hour=0,
             deferral_saved_usd=0.0,
             deferral_saved_kg=0.0,
         )
@@ -175,33 +175,41 @@ def _build_candidate(
             energy_kwh=energy,
             cost_usd=cost,
             carbon_kg=carbon,
-            start_hour=0.0,
+            start_hour=0,
             deferral_saved_usd=0.0,
             deferral_saved_kg=0.0,
         )
     
     # For interruptible jobs, find the best start hour
-    best_start = 0.0
-    best_cost, best_carbon = integrate_window(0.0, hours)
-    best_objective = weights["cost"] * best_cost + weights["carbon"] * best_carbon
+    best_start = 0
+    cost_at_zero, carbon_at_zero = integrate_window(0.0, hours)
+    best_cost = cost_at_zero
+    best_carbon = carbon_at_zero
+    
+    # Compute objective using ratios to hour-0 values
+    def compute_objective(cost: float, carbon: float) -> float:
+        cost_ratio = cost / cost_at_zero if cost_at_zero > 0 else 0.0
+        carbon_ratio = carbon / carbon_at_zero if carbon_at_zero > 0 else 0.0
+        return weights["cost"] * cost_ratio + weights["carbon"] * carbon_ratio
+    
+    best_objective = compute_objective(cost_at_zero, carbon_at_zero)
     
     # Try all possible start hours within the deadline constraint
-    max_start = 24.0 - hours
+    # L = 23 without deadline, else min(23, floor(deadline - runtime))
     if w.deadline_hours is not None:
-        max_start = min(max_start, w.deadline_hours - hours)
+        max_start = min(23, int(w.deadline_hours - hours))
+    else:
+        max_start = 23
     
-    for start in range(1, int(max_start) + 1):
+    for start in range(1, max_start + 1):
         cost, carbon = integrate_window(float(start), hours)
-        objective = weights["cost"] * cost + weights["carbon"] * carbon
+        objective = compute_objective(cost, carbon)
         
         if objective < best_objective:
             best_objective = objective
-            best_start = float(start)
+            best_start = start
             best_cost = cost
             best_carbon = carbon
-    
-    # Calculate savings from deferral
-    cost_at_zero, carbon_at_zero = integrate_window(0.0, hours)
     
     return Candidate(
         site_id=site.site_id,
