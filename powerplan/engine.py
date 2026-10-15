@@ -34,6 +34,9 @@ class Candidate:
     energy_kwh: float
     cost_usd: float
     carbon_kg: float
+    start_hour: float = 0.0
+    deferral_saved_usd: float = 0.0
+    deferral_saved_kg: float = 0.0
     score: float = 0.0
     components: dict = field(default_factory=dict)
 
@@ -76,7 +79,10 @@ class Plan:
 
     @property
     def makespan_hours(self) -> float:
-        return max((p.chosen.runtime_hours for p in self.placements), default=0.0)
+        return max(
+            (p.chosen.start_hour + p.chosen.runtime_hours for p in self.placements),
+            default=0.0
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,11 +116,93 @@ def _infeasible_reason(
     return None
 
 
-def _build_candidate(w: Workload, site: Site, pool: AcceleratorPool) -> Candidate:
+def _build_candidate(
+    w: Workload, site: Site, pool: AcceleratorPool, weights: dict
+) -> Candidate:
     hours = w.runtime_hours(pool)
     it_kw = pool.draw_kw(w.gpu_count)
     facility_kw = site.facility_kw(it_kw)
     energy = facility_kw * hours
+    
+    # If no curves, use scalar pricing (start at hour 0)
+    if site.price_curve is None and site.carbon_curve is None:
+        return Candidate(
+            site_id=site.site_id,
+            pool_id=pool.pool_id,
+            accelerator=pool.accelerator,
+            runtime_hours=hours,
+            it_kw=it_kw,
+            facility_kw=facility_kw,
+            energy_kwh=energy,
+            cost_usd=energy * site.price_per_kwh,
+            carbon_kg=energy * site.carbon_g_per_kwh / 1000.0,
+            start_hour=0.0,
+            deferral_saved_usd=0.0,
+            deferral_saved_kg=0.0,
+        )
+    
+    # Time-integrated cost and carbon
+    def integrate_window(start: float, duration: float) -> tuple[float, float]:
+        """Integrate cost and carbon over a time window."""
+        cost = 0.0
+        carbon = 0.0
+        h = start
+        remaining = duration
+        
+        while remaining > 1e-9:
+            chunk = min(1.0, remaining)
+            price = site.price_at(h) if site.price_curve else site.price_per_kwh
+            carbon_intensity = site.carbon_at(h) if site.carbon_curve else site.carbon_g_per_kwh
+            
+            cost += facility_kw * chunk * price
+            carbon += facility_kw * chunk * carbon_intensity / 1000.0
+            
+            h += chunk
+            remaining -= chunk
+        
+        return cost, carbon
+    
+    # For non-interruptible or jobs with no flexibility, start at hour 0
+    if not w.interruptible:
+        cost, carbon = integrate_window(0.0, hours)
+        return Candidate(
+            site_id=site.site_id,
+            pool_id=pool.pool_id,
+            accelerator=pool.accelerator,
+            runtime_hours=hours,
+            it_kw=it_kw,
+            facility_kw=facility_kw,
+            energy_kwh=energy,
+            cost_usd=cost,
+            carbon_kg=carbon,
+            start_hour=0.0,
+            deferral_saved_usd=0.0,
+            deferral_saved_kg=0.0,
+        )
+    
+    # For interruptible jobs, find the best start hour
+    best_start = 0.0
+    best_cost, best_carbon = integrate_window(0.0, hours)
+    best_objective = weights["cost"] * best_cost + weights["carbon"] * best_carbon
+    
+    # Try all possible start hours within the deadline constraint
+    max_start = 24.0 - hours
+    if w.deadline_hours is not None:
+        max_start = min(max_start, w.deadline_hours - hours)
+    
+    for start in range(1, int(max_start) + 1):
+        cost, carbon = integrate_window(float(start), hours)
+        objective = weights["cost"] * cost + weights["carbon"] * carbon
+        
+        if objective < best_objective:
+            best_objective = objective
+            best_start = float(start)
+            best_cost = cost
+            best_carbon = carbon
+    
+    # Calculate savings from deferral
+    cost_at_zero, carbon_at_zero = integrate_window(0.0, hours)
+    
     return Candidate(
         site_id=site.site_id,
         pool_id=pool.pool_id,
@@ -123,8 +211,11 @@ def _build_candidate(w: Workload, site: Site, pool: AcceleratorPool) -> Candidat
         it_kw=it_kw,
         facility_kw=facility_kw,
         energy_kwh=energy,
-        cost_usd=energy * site.price_per_kwh,
-        carbon_kg=energy * site.carbon_g_per_kwh / 1000.0,
+        cost_usd=best_cost,
+        carbon_kg=best_carbon,
+        start_hour=best_start,
+        deferral_saved_usd=cost_at_zero - best_cost,
+        deferral_saved_kg=carbon_at_zero - best_carbon,
     )
 
 
@@ -179,6 +270,9 @@ def plan(
     result.notes.append(
         "Greedy priority-ordered placement; not proven globally optimal."
     )
+    result.notes.append(
+        "Power headroom checked at placement time; no explicit time-slicing of capacity."
+    )
 
     for w in _order(workloads):
         candidates: list[Candidate] = []
@@ -190,7 +284,7 @@ def plan(
                 if reason:
                     rejected.append(Rejection(site.site_id, pool.pool_id, reason))
                 else:
-                    candidates.append(_build_candidate(w, site, pool))
+                    candidates.append(_build_candidate(w, site, pool, weights))
 
         if not candidates:
             result.unplaced.append((w.workload_id, rejected))
