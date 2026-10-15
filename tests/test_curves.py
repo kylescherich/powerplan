@@ -79,9 +79,9 @@ def test_price_at_returns_curve_value():
         price_curve=curve,
     )
     
-    assert site.price_at(0) == 0.1
-    assert site.price_at(5) == 0.15
-    assert site.price_at(23) == 0.33
+    assert site.price_at(0) == pytest.approx(0.1)
+    assert site.price_at(5) == pytest.approx(0.15)
+    assert site.price_at(23) == pytest.approx(0.33)
 
 
 def test_price_at_wraps_hour():
@@ -99,11 +99,11 @@ def test_price_at_wraps_hour():
     )
     
     # Hour 25 should wrap to index 1
-    assert site.price_at(25) == 0.11
+    assert site.price_at(25) == pytest.approx(0.11)
     # Hour 48 should wrap to index 0
-    assert site.price_at(48) == 0.1
+    assert site.price_at(48) == pytest.approx(0.1)
     # Hour 50 should wrap to index 2
-    assert site.price_at(50) == 0.12
+    assert site.price_at(50) == pytest.approx(0.12)
 
 
 def test_price_at_falls_back_to_scalar():
