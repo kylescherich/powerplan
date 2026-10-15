@@ -37,7 +37,10 @@ def pool_degraded(fleet: Fleet, site_id: str, pool_id: str, lost: int) -> Fleet:
 
 def price_spike(fleet: Fleet, site_id: str, multiplier: float) -> Fleet:
     f = copy.deepcopy(fleet)
-    f.site(site_id).price_per_kwh *= multiplier
+    s = f.site(site_id)
+    s.price_per_kwh *= multiplier
+    if s.price_curve is not None:
+        s.price_curve = [v * multiplier for v in s.price_curve]
     return f
 
 
