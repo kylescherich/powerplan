@@ -48,6 +48,8 @@ class Site:
 
     # --- mutable planning state -------------------------------------------
     committed_kw: float = 0.0
+    # Facility kW committed in each hour of the day (index = hour % 24).
+    committed_kw_by_hour: list[float] = field(default_factory=lambda: [0.0] * 24)
 
     def __post_init__(self):
         """Validate curve fields if present."""
@@ -69,6 +71,17 @@ class Site:
         if not self.online:
             return 0.0
         return self.power_capacity_kw - self.baseline_load_kw - self.committed_kw
+
+    def headroom_kw_at(self, hour: float) -> float:
+        """Facility-side power still available in the given hour (wraps at 24)."""
+        if not self.online:
+            return 0.0
+        index = int(hour) % 24
+        return (
+            self.power_capacity_kw
+            - self.baseline_load_kw
+            - self.committed_kw_by_hour[index]
+        )
 
     def facility_kw(self, it_kw: float) -> float:
         return it_kw * self.pue
@@ -130,6 +143,7 @@ class Fleet:
     def reset(self) -> None:
         for s in self.sites:
             s.committed_kw = 0.0
+            s.committed_kw_by_hour = [0.0] * 24
             for p in s.pools:
                 p.available = p.total
 
