@@ -83,11 +83,14 @@ justify breaking this.
 
 ## What's deliberately unfinished
 
-**Time-of-day scheduling is basic.** Sites now support 24-hour `price_curve` and
+**Time-of-day scheduling is basic.** Sites support 24-hour `price_curve` and
 `carbon_curve` fields, and interruptible workloads defer their start hour to
-minimise cost or carbon within their deadline window. What is still not modelled:
-time-indexed power capacity (headroom is checked at placement time, not across
-the full schedule), mid-run preemption (a job holds its accelerators until
+minimise cost or carbon within their deadline window. Power capacity is now
+time-indexed: `Site.committed_kw_by_hour` tracks the load in each hour, and a
+job is feasible only if its facility kW fits the headroom in every hour of its
+window. An interruptible job may start later when early hours are full
+(`Candidate.deferred_for_capacity`), and the explanation says so. What is still
+not modelled: mid-run preemption (a job holds its accelerators until
 completion), site-local time zones (all hours are UTC-relative), and sourced
 curve data (the sample curves are synthetic). Real utility tariffs and grid
 carbon APIs (WattTime, Electricity Maps) are the credibility upgrade.
