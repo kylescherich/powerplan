@@ -16,9 +16,11 @@ are already written as pure functions of a candidate.
 from __future__ import annotations
 
 import math
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from .models import AcceleratorPool, Fleet, Site, Workload
+from .trace import Tracer
 
 # Objective weights. Lower score is better; weights should sum to ~1.
 DEFAULT_WEIGHTS = {"cost": 0.45, "carbon": 0.25, "runtime": 0.30}
@@ -312,10 +314,18 @@ def _order(workloads: list[Workload]) -> list[Workload]:
     )
 
 
+def _span(tracer: Tracer | None, name: str, **attributes):
+    """A tracer span, or a do-nothing context yielding a throwaway dict."""
+    if tracer is None:
+        return nullcontext(dict(attributes))
+    return tracer.span(name, **attributes)
+
+
 def plan(
     fleet: Fleet,
     workloads: list[Workload],
     weights: dict | None = None,
+    tracer: Tracer | None = None,
 ) -> Plan:
     weights = weights or DEFAULT_WEIGHTS
     fleet.reset()
@@ -327,42 +337,86 @@ def plan(
         "Power headroom is checked per hour of each job's window (time-slicing of capacity over the 24-hour window); greedy order decides who gets contested hours."
     )
 
-    for w in _order(workloads):
-        candidates: list[Candidate] = []
-        rejected: list[Rejection] = []
+    with _span(
+        tracer,
+        "powerplan.plan",
+        **{
+            "workloads.count": len(workloads),
+            "weights.cost": weights["cost"],
+            "weights.carbon": weights["carbon"],
+            "weights.runtime": weights["runtime"],
+        },
+    ) as root:
+        for w in _order(workloads):
+            with _span(
+                tracer,
+                "powerplan.place",
+                **{
+                    "workload.id": w.workload_id,
+                    "workload.priority": w.priority,
+                },
+            ) as span:
+                candidates: list[Candidate] = []
+                rejected: list[Rejection] = []
 
-        for site in fleet.sites:
-            for pool in site.pools:
-                reason = _infeasible_reason(w, site, pool)
-                if reason:
-                    rejected.append(Rejection(site.site_id, pool.pool_id, reason))
-                else:
-                    candidates.append(_build_candidate(w, site, pool, weights))
+                for site in fleet.sites:
+                    for pool in site.pools:
+                        reason = _infeasible_reason(w, site, pool)
+                        if reason:
+                            rejected.append(
+                                Rejection(site.site_id, pool.pool_id, reason)
+                            )
+                        else:
+                            candidates.append(
+                                _build_candidate(w, site, pool, weights)
+                            )
 
-        if not candidates:
-            result.unplaced.append((w.workload_id, rejected))
-            continue
+                span["candidates.considered"] = len(candidates)
+                span["candidates.rejected"] = len(rejected)
 
-        _score(candidates, weights)
-        candidates.sort(key=lambda c: (c.score, c.cost_usd))
-        best = candidates[0]
+                if not candidates:
+                    result.unplaced.append((w.workload_id, rejected))
+                    span["placement.outcome"] = "unplaced"
+                    span["rejection.reasons"] = [
+                        f"{r.site_id}/{r.pool_id}: {r.reason}" for r in rejected
+                    ]
+                    continue
 
-        # commit resources
-        site = fleet.site(best.site_id)
-        site.pool(best.pool_id).available -= w.gpu_count
-        for hour in _window_hours(best.start_hour, best.runtime_hours):
-            site.committed_kw_by_hour[hour] += best.facility_kw
-        site.committed_kw = max(site.committed_kw_by_hour)
+                _score(candidates, weights)
+                candidates.sort(key=lambda c: (c.score, c.cost_usd))
+                best = candidates[0]
 
-        result.placements.append(
-            Placement(
-                workload_id=w.workload_id,
-                workload_name=w.name,
-                chosen=best,
-                runner_up=candidates[1] if len(candidates) > 1 else None,
-                considered=len(candidates),
-                rejected=rejected,
-            )
-        )
+                # commit resources
+                site = fleet.site(best.site_id)
+                site.pool(best.pool_id).available -= w.gpu_count
+                for hour in _window_hours(best.start_hour, best.runtime_hours):
+                    site.committed_kw_by_hour[hour] += best.facility_kw
+                site.committed_kw = max(site.committed_kw_by_hour)
+
+                runner_up = candidates[1] if len(candidates) > 1 else None
+                result.placements.append(
+                    Placement(
+                        workload_id=w.workload_id,
+                        workload_name=w.name,
+                        chosen=best,
+                        runner_up=runner_up,
+                        considered=len(candidates),
+                        rejected=rejected,
+                    )
+                )
+
+                span["placement.outcome"] = "placed"
+                span["placement.site_id"] = best.site_id
+                span["placement.pool_id"] = best.pool_id
+                span["placement.start_hour"] = best.start_hour
+                span["placement.score"] = best.score
+                span["placement.deferred_for_capacity"] = best.deferred_for_capacity
+                if runner_up is not None:
+                    span["runner_up.site_id"] = runner_up.site_id
+                    span["runner_up.pool_id"] = runner_up.pool_id
+                    span["runner_up.score_margin"] = runner_up.score - best.score
+
+        root["placements.count"] = len(result.placements)
+        root["unplaced.count"] = len(result.unplaced)
 
     return result
