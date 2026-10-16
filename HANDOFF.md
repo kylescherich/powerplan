@@ -103,8 +103,10 @@ exists so W-004 has exactly one feasible home. That last one is intentional: it
 makes `whatif --offline SITE-OR` drop a workload and expose a single-vendor
 dependency, which is the best demo in the repo.
 
-**No time dimension at all.** `makespan` is just the longest single runtime, not
-a real schedule. There is no queueing, no preemption, no job start times.
+**Time is modelled within one day only.** Jobs now have start hours, and power
+is checked per hour of each job's window. There is still no queueing beyond the
+24-hour window and no preemption, and `makespan` is the latest start plus
+runtime, not a real multi-day schedule.
 
 **Observability is `print()`.** OpenTelemetry spans per placement decision are
 on the roadmap and would connect this to the telemetry half of the skill story
@@ -130,8 +132,13 @@ it's meant to demonstrate.
 
 1. ~~Time-of-day price and carbon curves; make `interruptible` mean something.~~
    **Done.**
-2. MILP or CP-SAT over the existing candidate list; report the greedy gap
-   explicitly rather than quietly replacing the number.
+2. ~~MILP or CP-SAT over the existing candidate list; report the greedy gap
+   explicitly rather than quietly replacing the number.~~ **Done** as a stdlib
+   exact search (branch and bound in `powerplan/optimal.py`), not a MILP.
+   `plan --compare-optimal` reports the gap and never replaces the greedy's
+   numbers. The search is exact only for small fleets: it stops after 200,000
+   nodes with `SearchTooLarge` (CLI exit code 3). A real solver is the step
+   when fleets outgrow it.
 3. OpenTelemetry spans per decision.
 4. Live telemetry ingest (DCGM power draw, utility demand-response signals) in
    place of static JSON.

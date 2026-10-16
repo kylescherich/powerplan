@@ -11,6 +11,7 @@ Zero runtime dependencies (Python 3.11+, stdlib only). `pytest` for tests.
 ```bash
 python -m powerplan plan
 python -m powerplan plan --w-carbon 0.6 --w-cost 0.2 --w-runtime 0.2
+python -m powerplan plan --compare-optimal
 python -m powerplan whatif --offline SITE-OR
 python -m powerplan whatif --curtail SITE-TX:0.45
 python -m powerplan whatif --degrade SITE-OR:or-mi300:64
@@ -67,6 +68,33 @@ plan's `notes` rather than hidden. Because the objective and constraints are
 pure functions of a `Candidate`, dropping a MILP over the same candidate list is
 a contained change — the natural v2.
 
+## Comparing against the exact optimum
+
+`plan --compare-optimal` runs the normal greedy plan, prints it and the audit
+line as usual, then prints a gap report: the greedy plan next to a true optimum
+over the same candidates and the same constraints. The optimum comes from an
+exact branch-and-bound search in `powerplan/optimal.py`, written with the
+stdlib only (no solver dependency).
+
+**The greedy's numbers are never replaced.** The report sits beside the greedy
+plan; it does not change what the planner chose, and the greedy remains the plan
+of record. The report names which workloads the optimum would move.
+
+Greedy and optimum are scored by one objective, compared lexicographically:
+first, for each priority level from 1 upward, more placed workloads is better;
+only then does a lower total weighted score (cost, carbon and runtime, each
+normalised against the workloads' reference totals) win. A plan that places
+more high-priority work therefore beats a cheaper plan that places less. When
+the two plans place different work, the score gap is reported as `n/a`. When the
+optimum is worse than the greedy on cost or on carbon, the report says so
+rather than claiming it is better on every axis.
+
+**Size limit.** The search is exact, so it only suits small fleets such as the
+sample data. It stops after 200,000 search nodes and refuses with a clear
+`too large for the stdlib search` error; the CLI prints that to stderr and
+exits with code 3 (the normal plan output has already been printed). Past that
+size, a real solver is the next step.
+
 ## Why it's explainable
 
 Each placement keeps its full ranked candidate list, so the explainer names the
@@ -107,6 +135,7 @@ same weights means the plan is reproducible.
 ```
 powerplan/models.py    domain types, JSON loading, power math
 powerplan/engine.py    feasibility, scoring, greedy assignment
+powerplan/optimal.py   exact reference search and greedy-gap report
 powerplan/explain.py   tradeoff narration
 powerplan/whatif.py    perturbations and plan diffing
 powerplan/audit.py     append-only decision log
@@ -118,7 +147,9 @@ tests/                 constraint, sensitivity and audit tests
 
 1. ~~Time-of-day price and carbon curves; defer interruptible jobs into cheap or
    clean windows instead of running them immediately.~~ **Done.**
-2. MILP / CP-SAT solver over the existing candidate list; report the greedy gap.
+2. ~~Report the greedy gap against an exact optimum.~~ **Done** as a stdlib
+   exact search for small fleets (`plan --compare-optimal`); a MILP / CP-SAT
+   solver is the step when fleets outgrow it.
 3. OpenTelemetry spans per placement decision → real observability, not prints.
 4. Ingest live telemetry (DCGM power draw, utility demand-response signals)
    instead of static JSON.
