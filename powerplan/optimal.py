@@ -17,7 +17,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .engine import DEFAULT_WEIGHTS, _allowed_starts, _window_hours
+from .engine import (
+    DEFAULT_WEIGHTS,
+    Plan,
+    _allowed_starts,
+    _order,
+    _window_hours,
+    plan,
+)
 from .models import Fleet, Site, Workload
 
 
@@ -173,3 +180,198 @@ def evaluate(
         total_cost_usd=cost,
         total_carbon_kg=carbon,
     )
+
+
+# ---------------------------------------------------------------------------
+# exact search
+# ---------------------------------------------------------------------------
+
+class SearchTooLarge(RuntimeError):
+    """The exact search exceeded its node budget."""
+
+
+@dataclass
+class OptimalResult:
+    assignment: dict[str, Option | None]
+    objective: Objective
+    nodes: int
+
+
+def solve(
+    fleet: Fleet,
+    workloads: list[Workload],
+    weights: dict | None = None,
+    max_nodes: int = 200_000,
+) -> OptimalResult:
+    """Exact branch and bound over every workload's options (or unplaced).
+
+    Depth-first in the engine's workload order. Each workload tries its options
+    sorted by ``(contribution, site_id, pool_id, start_hour)`` and then
+    "unplaced". The first best plan found is kept (strict improvement only).
+    Does not change the fleet's planning state. Raises `SearchTooLarge` when
+    more than `max_nodes` nodes are explored.
+    """
+    weights = weights or DEFAULT_WEIGHTS
+    options_by_workload = {
+        w.workload_id: options_for(w, fleet) for w in workloads
+    }
+    refs = reference_totals(options_by_workload)
+    order = _order(workloads)
+    n = len(order)
+    levels = sorted({w.priority for w in workloads})
+    level_index = {p: i for i, p in enumerate(levels)}
+    n_levels = len(levels)
+
+    ranked: list[list[tuple[float, Option]]] = []
+    for w in order:
+        scored = [
+            (contribution(o, weights, refs), o)
+            for o in options_by_workload[w.workload_id]
+        ]
+        scored.sort(
+            key=lambda item: (
+                item[0],
+                item[1].site_id,
+                item[1].pool_id,
+                item[1].start_hour,
+            )
+        )
+        ranked.append(scored)
+
+    # Optimistic remainders: everything with options placed at its minimum.
+    suffix_counts = [[0] * n_levels for _ in range(n + 1)]
+    suffix_min = [0.0] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        suffix_counts[i] = list(suffix_counts[i + 1])
+        suffix_min[i] = suffix_min[i + 1]
+        if ranked[i]:
+            suffix_counts[i][level_index[order[i].priority]] += 1
+            suffix_min[i] += ranked[i][0][0]
+
+    pool_total = {
+        (site.site_id, pool.pool_id): pool.total
+        for site in fleet.sites
+        for pool in site.pools
+    }
+    pool_used = {key: 0 for key in pool_total}
+    site_room = {
+        site.site_id: site.power_capacity_kw - site.baseline_load_kw
+        for site in fleet.sites
+    }
+    load = {site.site_id: [0.0] * 24 for site in fleet.sites}
+
+    placed = [0] * n_levels
+    chosen: list[Option | None] = [None] * n
+    best_key: tuple | None = None
+    best_choice: list[Option | None] | None = None
+    nodes = 0
+
+    def too_large() -> SearchTooLarge:
+        return SearchTooLarge(
+            f"problem is too large for the stdlib search "
+            f"(more than {max_nodes} nodes); a real solver is needed"
+        )
+
+    def bound_key(i: int, score: float) -> tuple:
+        counts = suffix_counts[i]
+        return tuple(-(placed[k] + counts[k]) for k in range(n_levels)) + (
+            round(score + suffix_min[i], 9),
+        )
+
+    def usable(option: Option) -> bool:
+        pool_key = (option.site_id, option.pool_id)
+        if pool_used[pool_key] + option.gpu_count > pool_total[pool_key]:
+            return False
+        room = site_room[option.site_id]
+        committed = load[option.site_id]
+        return all(
+            option.facility_kw <= room - committed[h] for h in option.hours
+        )
+
+    def dfs(i: int, score: float) -> None:
+        nonlocal best_key, best_choice, nodes
+        key = bound_key(i, score)
+        if best_key is not None and key >= best_key:
+            return
+        if i == n:
+            best_key = key
+            best_choice = list(chosen)
+            return
+
+        level = level_index[order[i].priority]
+        for contrib, option in ranked[i]:
+            if not usable(option):
+                continue
+            nodes += 1
+            if nodes > max_nodes:
+                raise too_large()
+            pool_key = (option.site_id, option.pool_id)
+            old_load = load[option.site_id]
+            new_load = list(old_load)
+            for h in option.hours:
+                new_load[h] += option.facility_kw
+            load[option.site_id] = new_load
+            pool_used[pool_key] += option.gpu_count
+            placed[level] += 1
+            chosen[i] = option
+            dfs(i + 1, score + contrib)
+            chosen[i] = None
+            placed[level] -= 1
+            pool_used[pool_key] -= option.gpu_count
+            load[option.site_id] = old_load
+
+        nodes += 1
+        if nodes > max_nodes:
+            raise too_large()
+        dfs(i + 1, score)
+
+    try:
+        dfs(0, 0.0)
+    except RecursionError:
+        raise too_large() from None
+
+    assert best_choice is not None  # the all-unplaced dive always completes
+    assignment = {
+        w.workload_id: choice for w, choice in zip(order, best_choice)
+    }
+    objective = evaluate(assignment, workloads, options_by_workload, weights)
+    return OptimalResult(assignment=assignment, objective=objective, nodes=nodes)
+
+
+def greedy_assignment(
+    fleet: Fleet,
+    workloads: list[Workload],
+    weights: dict | None = None,
+) -> tuple[dict[str, Option | None], dict[str, list[Option]], Plan]:
+    """Run the engine's greedy and express its result as Options.
+
+    Returns ``(assignment, options_by_workload, plan)``. Each placement maps to
+    the Option with the same ``(site_id, pool_id, start_hour)``; unplaced
+    workloads map to None.
+    """
+    result = plan(fleet, workloads, weights)
+    options_by_workload = {
+        w.workload_id: options_for(w, fleet) for w in workloads
+    }
+    assignment: dict[str, Option | None] = {
+        w.workload_id: None for w in workloads
+    }
+    for placement in result.placements:
+        chosen = placement.chosen
+        match = next(
+            (
+                o
+                for o in options_by_workload[placement.workload_id]
+                if (o.site_id, o.pool_id, o.start_hour)
+                == (chosen.site_id, chosen.pool_id, chosen.start_hour)
+            ),
+            None,
+        )
+        if match is None:
+            raise ValueError(
+                f"{placement.workload_id}: greedy placement "
+                f"{chosen.site_id}/{chosen.pool_id}@{chosen.start_hour} "
+                f"has no matching option"
+            )
+        assignment[placement.workload_id] = match
+    return assignment, options_by_workload, result
