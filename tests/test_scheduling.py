@@ -464,4 +464,4 @@ def test_plan_notes_mention_power_headroom():
     
     # Check that the power headroom note is present
     assert any("power headroom" in note.lower() for note in p.notes)
-    assert any("time-slicing" in note.lower() for note in p.notes)
+    assert any("per hour" in note.lower() for note in p.notes)
