@@ -37,6 +37,7 @@ class Candidate:
     carbon_kg: float
     score: float = 0.0
     components: dict = field(default_factory=dict)
+    deferred_for_capacity: bool = False
     start_hour: int = 0
     deferral_saved_usd: float = 0.0
     deferral_saved_kg: float = 0.0
@@ -100,6 +101,35 @@ def _window_hours(start_hour: int, runtime_hours: float) -> list[int]:
     return [(int(start_hour) + i) % 24 for i in range(count)]
 
 
+def _allowed_starts(w: Workload, runtime_hours: float) -> list[int]:
+    """Start hours a workload may use, before looking at capacity.
+
+    Non-interruptible jobs start at hour 0. Interruptible jobs may start at
+    0..23, or 0..min(23, floor(deadline - runtime)) when they have a deadline.
+    """
+    if not w.interruptible:
+        return [0]
+    if w.deadline_hours is None:
+        last = 23
+    else:
+        last = min(23, math.floor(w.deadline_hours - runtime_hours))
+    return list(range(0, last + 1))
+
+
+def _feasible_starts(
+    w: Workload, site: Site, facility_kw: float, runtime_hours: float
+) -> list[int]:
+    """Allowed starts whose whole window has enough power headroom."""
+    return [
+        s
+        for s in _allowed_starts(w, runtime_hours)
+        if all(
+            facility_kw <= site.headroom_kw_at(h)
+            for h in _window_hours(s, runtime_hours)
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # feasibility
 # ---------------------------------------------------------------------------
@@ -119,9 +149,18 @@ def _infeasible_reason(
         return f"{pool.memory_gb:.0f}GB HBM < {w.min_memory_gb:.0f}GB required"
 
     facility_kw = site.facility_kw(pool.draw_kw(w.gpu_count))
-    if facility_kw > site.headroom_kw:
+    runtime = w.runtime_hours(pool)
+    # If the deadline leaves no allowed start, the deadline check below reports it.
+    if _allowed_starts(w, runtime) and not _feasible_starts(
+        w, site, facility_kw, runtime
+    ):
+        if not w.interruptible:
+            tightest = min(
+                site.headroom_kw_at(h) for h in _window_hours(0, runtime)
+            )
+            return f"needs {facility_kw:.0f}kW, only {tightest:.0f}kW headroom"
         return (
-            f"needs {facility_kw:.0f}kW, only {site.headroom_kw:.0f}kW headroom"
+            f"needs {facility_kw:.0f}kW, no allowed start hour has that headroom"
         )
     if w.deadline_hours is not None and w.runtime_hours(pool) > w.deadline_hours:
         return (
@@ -138,8 +177,16 @@ def _build_candidate(
     it_kw = pool.draw_kw(w.gpu_count)
     facility_kw = site.facility_kw(it_kw)
     energy = facility_kw * hours
+
+    feasible = _feasible_starts(w, site, facility_kw, hours)
+    if not feasible:
+        raise ValueError(
+            f"{w.workload_id} has no feasible start on {site.site_id}/{pool.pool_id}"
+        )
+    # Hour 0 is allowed whenever any start is, so this means "hour 0 was full".
+    deferred = 0 not in feasible
     
-    # If no curves, use scalar pricing (start at hour 0)
+    # If no curves, use scalar pricing; start at the earliest feasible hour
     if site.price_curve is None and site.carbon_curve is None:
         return Candidate(
             site_id=site.site_id,
@@ -151,7 +198,8 @@ def _build_candidate(
             energy_kwh=energy,
             cost_usd=energy * site.price_per_kwh,
             carbon_kg=energy * site.carbon_g_per_kwh / 1000.0,
-            start_hour=0,
+            deferred_for_capacity=deferred,
+            start_hour=feasible[0],
             deferral_saved_usd=0.0,
             deferral_saved_kg=0.0,
         )
@@ -177,29 +225,10 @@ def _build_candidate(
         
         return cost, carbon
     
-    # For non-interruptible or jobs with no flexibility, start at hour 0
-    if not w.interruptible:
-        cost, carbon = integrate_window(0.0, hours)
-        return Candidate(
-            site_id=site.site_id,
-            pool_id=pool.pool_id,
-            accelerator=pool.accelerator,
-            runtime_hours=hours,
-            it_kw=it_kw,
-            facility_kw=facility_kw,
-            energy_kwh=energy,
-            cost_usd=cost,
-            carbon_kg=carbon,
-            start_hour=0,
-            deferral_saved_usd=0.0,
-            deferral_saved_kg=0.0,
-        )
+    # Hour-0 values are the reference for the start-choice objective and for
+    # deferral_saved_* (hour-0 value minus chosen value), even if hour 0 is full.
     
-    # For interruptible jobs, find the best start hour
-    best_start = 0
     cost_at_zero, carbon_at_zero = integrate_window(0.0, hours)
-    best_cost = cost_at_zero
-    best_carbon = carbon_at_zero
     
     # Compute objective using ratios to hour-0 values
     def compute_objective(cost: float, carbon: float) -> float:
@@ -207,16 +236,16 @@ def _build_candidate(
         carbon_ratio = carbon / carbon_at_zero if carbon_at_zero > 0 else 0.0
         return weights["cost"] * cost_ratio + weights["carbon"] * carbon_ratio
     
-    best_objective = compute_objective(cost_at_zero, carbon_at_zero)
+    # Start from the earliest feasible start; later starts must be strictly
+    # better, so ties go to the earliest.
+    best_start = feasible[0]
+    best_cost, best_carbon = integrate_window(float(best_start), hours)
+    best_objective = compute_objective(best_cost, best_carbon)
     
-    # Try all possible start hours within the deadline constraint
-    # L = 23 without deadline, else min(23, floor(deadline - runtime))
-    if w.deadline_hours is not None:
-        max_start = min(23, int(w.deadline_hours - hours))
-    else:
-        max_start = 23
+    # Only feasible starts are considered: allowed by the deadline rule and with
+    # enough power headroom in every hour of the window.
     
-    for start in range(1, max_start + 1):
+    for start in feasible[1:]:
         cost, carbon = integrate_window(float(start), hours)
         objective = compute_objective(cost, carbon)
         
@@ -236,6 +265,7 @@ def _build_candidate(
         energy_kwh=energy,
         cost_usd=best_cost,
         carbon_kg=best_carbon,
+        deferred_for_capacity=deferred,
         start_hour=best_start,
         deferral_saved_usd=cost_at_zero - best_cost,
         deferral_saved_kg=carbon_at_zero - best_carbon,
@@ -294,7 +324,7 @@ def plan(
         "Greedy priority-ordered placement; not proven globally optimal."
     )
     result.notes.append(
-        "Power headroom checked at placement time; no explicit time-slicing of capacity."
+        "Power headroom is checked per hour of each job's window (time-slicing of capacity over the 24-hour window); greedy order decides who gets contested hours."
     )
 
     for w in _order(workloads):
