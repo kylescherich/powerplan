@@ -46,7 +46,13 @@ def explain(p: Placement) -> str:
     lines = [head, facts, weights]
 
     # Add start hour information if deferred
-    if c.start_hour > 0:
+    if c.deferred_for_capacity:
+        # Hour 0 was full: the start hour is forced, so claim no saving.
+        lines.append(
+            f"  starts at hour {c.start_hour:.0f} (UTC); "
+            f"hour 0 had no power headroom"
+        )
+    elif c.start_hour > 0:
         cost_saved = c.deferral_saved_usd
         carbon_saved = c.deferral_saved_kg
         

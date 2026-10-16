@@ -40,12 +40,21 @@ runtime     = ref_hours / pool.perf
 
 A placement is feasible only if the site is online, the region satisfies
 residency, the pool has enough free accelerators and enough HBM, the deadline is
-reachable at that pool's throughput, and `facility_kw ≤ site.headroom_kw`.
+reachable at that pool's throughput, and `facility_kw` fits the site's power
+headroom in every hour of the job's run window (`site.headroom_kw_at(h)`).
 
 Interruptible workloads may defer their start hour to minimise cost or carbon
 within their deadline window. Non-interruptible jobs start at hour zero. The
 plan output shows the chosen start hour and the integrated cost/carbon over the
 run window.
+
+Power headroom is checked per hour. A job only uses capacity in the hours it
+runs, so a short job does not block the rest of the day, and two jobs may share
+a site as long as their combined load fits in each hour. When the early hours
+are full, an interruptible job may start later, at the first hour whose whole
+window fits; a non-interruptible job that does not fit at hour zero is rejected
+with the binding reason. The explanation says when a start was forced by
+capacity rather than chosen for price or carbon.
 
 ## The objective
 
