@@ -14,6 +14,7 @@ import sys
 from . import audit, explain, whatif
 from .engine import DEFAULT_WEIGHTS, plan as make_plan
 from .models import load_fleet, load_workloads
+from .optimal import SearchTooLarge, compare, format_gap
 
 
 def _weights(args) -> dict:
@@ -43,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_plan = sub.add_parser("plan", help="produce and explain a placement plan")
     _common(p_plan)
+    p_plan.add_argument(
+        "--compare-optimal",
+        action="store_true",
+        help="also compare the greedy plan against an exact optimum",
+    )
 
     p_what = sub.add_parser("whatif", help="perturb the fleet and diff the plan")
     _common(p_what)
@@ -71,6 +77,14 @@ def main(argv: list[str] | None = None) -> int:
             print()
         run_id = audit.record(result, fleet, workloads, args.audit)
         print(f"audit run_id {run_id} -> {args.audit}")
+        if args.compare_optimal:
+            try:
+                report = compare(fleet, workloads, weights)
+            except SearchTooLarge as exc:
+                print(str(exc), file=sys.stderr)
+                return 3
+            print()
+            print(format_gap(report))
         return 0
 
     # whatif

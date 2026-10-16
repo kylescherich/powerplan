@@ -375,3 +375,117 @@ def greedy_assignment(
             )
         assignment[placement.workload_id] = match
     return assignment, options_by_workload, result
+
+
+# ---------------------------------------------------------------------------
+# gap report
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GapReport:
+    """Greedy versus exact optimum under one shared objective."""
+
+    greedy: Objective
+    optimum: Objective
+    same_work_placed: bool
+    score_gap: float | None
+    moved: list[tuple[str, str, str]]
+
+
+def _label(option: Option | None) -> str:
+    if option is None:
+        return "unplaced"
+    return f"{option.site_id}/{option.pool_id}@{option.start_hour}"
+
+
+def compare(
+    fleet: Fleet,
+    workloads: list[Workload],
+    weights: dict | None = None,
+    max_nodes: int = 200_000,
+) -> GapReport:
+    """Measure the greedy against the exact optimum; never replaces greedy numbers.
+
+    Raises `SearchTooLarge` when the exact search exceeds `max_nodes`.
+    """
+    weights = weights or DEFAULT_WEIGHTS
+    greedy_assign, options_by_workload, _ = greedy_assignment(
+        fleet, workloads, weights
+    )
+    greedy = evaluate(greedy_assign, workloads, options_by_workload, weights)
+    optimal = solve(fleet, workloads, weights, max_nodes=max_nodes)
+    optimum = optimal.objective
+
+    same = greedy.placed_by_priority == optimum.placed_by_priority
+    gap = greedy.score - optimum.score if same else None
+
+    moved: list[tuple[str, str, str]] = []
+    for w in sorted(workloads, key=lambda item: item.workload_id):
+        g_label = _label(greedy_assign.get(w.workload_id))
+        o_label = _label(optimal.assignment.get(w.workload_id))
+        if g_label != o_label:
+            moved.append((w.workload_id, g_label, o_label))
+
+    return GapReport(
+        greedy=greedy,
+        optimum=optimum,
+        same_work_placed=same,
+        score_gap=gap,
+        moved=moved,
+    )
+
+
+def _placed_text(placed: dict[int, int]) -> str:
+    if not placed:
+        return "none"
+    return ", ".join(f"P{p} {placed[p]}" for p in sorted(placed))
+
+
+def format_gap(report: GapReport) -> str:
+    """Render the gap report as plain text."""
+    g, o = report.greedy, report.optimum
+    eps = 1e-9
+
+    def row(label: str, body: str) -> str:
+        return f"  {label.ljust(20)}{body}"
+
+    if report.same_work_placed and report.score_gap is not None:
+        gap_text = f"gap {report.score_gap:.4f}"
+    else:
+        gap_text = "gap n/a (different work placed)"
+
+    lines = [
+        "greedy vs exact optimum (same objective, same constraints)",
+        f"  placed by priority  greedy {_placed_text(g.placed_by_priority)}"
+        f"  optimum {_placed_text(o.placed_by_priority)}",
+        row(
+            "objective score",
+            f"greedy {g.score:.4f}  optimum {o.score:.4f}  {gap_text}",
+        ),
+        row(
+            "total cost",
+            f"greedy ${g.total_cost_usd:,.0f}  optimum ${o.total_cost_usd:,.0f}",
+        ),
+        row(
+            "total carbon",
+            f"greedy {g.total_carbon_kg:,.0f} kg  "
+            f"optimum {o.total_carbon_kg:,.0f} kg",
+        ),
+    ]
+
+    worse = []
+    if o.total_cost_usd > g.total_cost_usd + eps:
+        worse.append("cost")
+    if o.total_carbon_kg > g.total_carbon_kg + eps:
+        worse.append("carbon")
+    if worse:
+        lines.append(f"  note: the optimum is worse on {' and '.join(worse)}")
+
+    if report.moved:
+        moved = "; ".join(
+            f"{wid} {before} -> {after}" for wid, before, after in report.moved
+        )
+        lines.append(f"  moved: {moved}")
+    else:
+        lines.append("  moved: none")
+    return "\n".join(lines)
