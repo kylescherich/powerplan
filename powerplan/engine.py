@@ -15,6 +15,7 @@ are already written as pure functions of a candidate.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .models import AcceleratorPool, Fleet, Site, Workload
@@ -227,6 +228,17 @@ def _build_candidate(
     )
 
 
+def _window_hours(start_hour: int, runtime_hours: float) -> list[int]:
+    """Distinct hours of the day (0-23) a job occupies.
+
+    A job started at `start_hour` that runs `runtime_hours` touches
+    ceil(runtime_hours) consecutive hours, wrapping at 24. Jobs of 24h or
+    longer occupy every hour of the day.
+    """
+    count = min(24, max(1, math.ceil(runtime_hours - 1e-9)))
+    return [(start_hour + i) % 24 for i in range(count)]
+
+
 # ---------------------------------------------------------------------------
 # scoring
 # ---------------------------------------------------------------------------
@@ -305,7 +317,9 @@ def plan(
         # commit resources
         site = fleet.site(best.site_id)
         site.pool(best.pool_id).available -= w.gpu_count
-        site.committed_kw += best.facility_kw
+        for hour in _window_hours(best.start_hour, best.runtime_hours):
+            site.committed_kw_by_hour[hour] += best.facility_kw
+        site.committed_kw = max(site.committed_kw_by_hour)
 
         result.placements.append(
             Placement(
