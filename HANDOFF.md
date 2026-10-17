@@ -108,9 +108,12 @@ is checked per hour of each job's window. There is still no queueing beyond the
 24-hour window and no preemption, and `makespan` is the latest start plus
 runtime, not a real multi-day schedule.
 
-**Observability is `print()`.** OpenTelemetry spans per placement decision are
-on the roadmap and would connect this to the telemetry half of the skill story
-it's meant to demonstrate.
+**Observability is a local span log, not OpenTelemetry.** `plan --trace PATH`
+writes one root span (`powerplan.plan`) and one span per placement decision
+(`powerplan.place`) as JSON lines, from the stdlib `Tracer` in
+`powerplan/trace.py`. The spans are OpenTelemetry-shaped, but there is no
+OpenTelemetry package and no exporter. Mapping them to OTLP and exporting them
+is the later step. `whatif` is not traced.
 
 ---
 
@@ -139,7 +142,9 @@ it's meant to demonstrate.
    numbers. The search is exact only for small fleets: it stops after 200,000
    nodes with `SearchTooLarge` (CLI exit code 3). A real solver is the step
    when fleets outgrow it.
-3. OpenTelemetry spans per decision.
+3. ~~OpenTelemetry spans per decision.~~ **Done** as a stdlib,
+   OpenTelemetry-shaped span log (`plan --trace`); no exporter, and mapping to
+   OTLP is the later step.
 4. Live telemetry ingest (DCGM power draw, utility demand-response signals) in
    place of static JSON.
 5. An agent layer that takes a goal like "cut next month's energy bill 15%
