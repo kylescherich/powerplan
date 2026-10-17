@@ -5,6 +5,7 @@
         --offline SITE-TX
     python -m powerplan whatif --curtail SITE-TX:0.4
     python -m powerplan plan   --telemetry examples/telemetry
+    python -m powerplan advise --goal carbon:50
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import sys
 from pathlib import Path
 
 from . import audit, explain, whatif
+from .advisor import advise as make_proposal
 from .engine import DEFAULT_WEIGHTS, plan as make_plan
 from .models import Fleet, load_fleet, load_workloads
 from .optimal import SearchTooLarge, compare, format_gap
@@ -70,13 +72,98 @@ def _apply_telemetry(fleet: Fleet, directory: str) -> str | None:
     )
 
 
-def _common(p: argparse.ArgumentParser) -> None:
+def _common(p: argparse.ArgumentParser, audit_option: bool = True) -> None:
     p.add_argument("--fleet", default="data/fleet.json")
     p.add_argument("--workloads", default="data/workloads.json")
-    p.add_argument("--audit", default="audit.jsonl")
+    if audit_option:
+        p.add_argument("--audit", default="audit.jsonl")
     p.add_argument("--w-cost", type=float)
     p.add_argument("--w-carbon", type=float)
     p.add_argument("--w-runtime", type=float)
+
+
+_GOAL_ERROR = "goal must look like cost:15 or carbon:50"
+
+
+def _parse_goal(text: str) -> tuple[str, float] | None:
+    """Parse ``METRIC:PERCENT`` (PERCENT may end in ``%``); None when invalid."""
+    metric, sep, percent = text.partition(":")
+    if not sep or metric not in ("cost", "carbon"):
+        return None
+    if percent.endswith("%"):
+        percent = percent[:-1]
+    try:
+        value = float(percent)
+    except ValueError:
+        return None
+    if not 0 <= value < 100:
+        return None
+    return metric, value
+
+
+def _total(result, metric: str) -> float:
+    return result.total_cost if metric == "cost" else result.total_carbon_kg
+
+
+def _amount(metric: str, value: float) -> str:
+    if metric == "cost":
+        return f"${value:,.0f}"
+    return f"{value:,.0f} kg CO2e"
+
+
+def _change(proposed: float, baseline: float) -> str:
+    pct = (proposed - baseline) / baseline * 100 if baseline else 0.0
+    return f"{round(pct, 1) + 0.0:+.1f}%"
+
+
+def _location(loc) -> str:
+    if loc is None:
+        return "unplaced"
+    site_id, pool_id, start_hour = loc
+    return f"{site_id}/{pool_id}@{start_hour}"
+
+
+def _run_advise(args, fleet: Fleet, workloads, weights: dict) -> int:
+    goal = _parse_goal(args.goal)
+    if goal is None:
+        print(_GOAL_ERROR, file=sys.stderr)
+        return 2
+    metric, percent = goal
+    other = "carbon" if metric == "cost" else "cost"
+
+    proposal = make_proposal(fleet, workloads, metric, percent / 100, weights)
+    base_value = _total(proposal.baseline, metric)
+    base_other = _total(proposal.baseline, other)
+    new_value = _total(proposal.proposed, metric)
+    new_other = _total(proposal.proposed, other)
+    w = proposal.weights
+
+    print(
+        f"goal: cut {metric} by {percent:g}% "
+        f"(baseline {_amount(metric, base_value)})"
+    )
+    found = (
+        f"cost {w['cost']:.2f}, carbon {w['carbon']:.2f}, "
+        f"runtime {w['runtime']:.2f} "
+        f"(distance {proposal.distance:.2f} from current weights)"
+    )
+    if proposal.feasible:
+        print(f"proposal: {found}")
+    else:
+        print(f"not reachable without placing less work; closest: {found}")
+    print(
+        f"result: {metric} {_amount(metric, new_value)} "
+        f"({_change(new_value, base_value)}), "
+        f"{other} {_amount(other, new_other)} "
+        f"({_change(new_other, base_other)})"
+    )
+    for wid, before, after in proposal.moved:
+        print(f"moved: {wid} {_location(before)} -> {_location(after)}")
+    print(
+        f"to apply: python -m powerplan plan --w-cost {w['cost']:.2f} "
+        f"--w-carbon {w['carbon']:.2f} --w-runtime {w['runtime']:.2f}"
+    )
+    return 0 if proposal.feasible else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,6 +189,18 @@ def main(argv: list[str] | None = None) -> int:
         "(demand-response limits) before planning",
     )
 
+    p_adv = sub.add_parser(
+        "advise",
+        help="propose objective weights that meet a goal (never applies them)",
+    )
+    _common(p_adv, audit_option=False)
+    p_adv.add_argument(
+        "--goal",
+        required=True,
+        metavar="METRIC:PERCENT",
+        help="cut cost or carbon by PERCENT, e.g. cost:15 or carbon:50",
+    )
+
     p_what = sub.add_parser("whatif", help="perturb the fleet and diff the plan")
     _common(p_what)
     p_what.add_argument("--offline", metavar="SITE", help="take a site fully offline")
@@ -119,6 +218,9 @@ def main(argv: list[str] | None = None) -> int:
     fleet = load_fleet(args.fleet)
     workloads = load_workloads(args.workloads)
     weights = _weights(args)
+
+    if args.cmd == "advise":
+        return _run_advise(args, fleet, workloads, weights)
 
     if args.cmd == "plan":
         if args.telemetry:
