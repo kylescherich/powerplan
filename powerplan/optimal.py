@@ -99,7 +99,7 @@ def options_for(w: Workload, fleet: Fleet) -> list[Option]:
             if w.deadline_hours is not None and w.deadline_hours < runtime:
                 continue
             facility_kw = site.facility_kw(pool.draw_kw(w.gpu_count))
-            if facility_kw > site.power_capacity_kw - site.baseline_load_kw:
+            if facility_kw > max(site.room_kw_at(h) for h in range(24)):
                 continue
             for start in _allowed_starts(w, runtime):
                 cost, carbon = _integrate(site, facility_kw, start, runtime)
@@ -255,7 +255,7 @@ def solve(
     }
     pool_used = {key: 0 for key in pool_total}
     site_room = {
-        site.site_id: site.power_capacity_kw - site.baseline_load_kw
+        site.site_id: [site.room_kw_at(h) for h in range(24)]
         for site in fleet.sites
     }
     load = {site.site_id: [0.0] * 24 for site in fleet.sites}
@@ -285,7 +285,7 @@ def solve(
         room = site_room[option.site_id]
         committed = load[option.site_id]
         return all(
-            option.facility_kw <= room - committed[h] for h in option.hours
+            option.facility_kw <= room[h] - committed[h] for h in option.hours
         )
 
     def dfs(i: int, score: float) -> None:

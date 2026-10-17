@@ -50,6 +50,11 @@ class Site:
     committed_kw: float = 0.0
     committed_kw_by_hour: list[float] = field(default_factory=lambda: [0.0] * 24)
 
+    # --- input: utility demand-response limits (not cleared by reset) ------
+    power_limit_kw_by_hour: list[float | None] = field(
+        default_factory=lambda: [None] * 24
+    )
+
     def __post_init__(self):
         """Validate curve fields if present."""
         if self.price_curve is not None:
@@ -71,16 +76,30 @@ class Site:
             return 0.0
         return self.power_capacity_kw - self.baseline_load_kw - self.committed_kw
 
+    def room_kw_at(self, hour: float) -> float:
+        """Facility power available for new work at the given hour, before
+        anything is committed (wraps at 24).
+
+        The ceiling is the site capacity, lowered by a demand-response limit
+        when one applies to that hour.
+        """
+        if not self.online:
+            return 0.0
+        index = int(hour) % 24
+        limit = self.power_limit_kw_by_hour[index]
+        ceiling = (
+            self.power_capacity_kw
+            if limit is None
+            else min(self.power_capacity_kw, limit)
+        )
+        return ceiling - self.baseline_load_kw
+
     def headroom_kw_at(self, hour: float) -> float:
         """Facility-side power still available at the given hour (wraps at 24)."""
         if not self.online:
             return 0.0
         index = int(hour) % 24
-        return (
-            self.power_capacity_kw
-            - self.baseline_load_kw
-            - self.committed_kw_by_hour[index]
-        )
+        return self.room_kw_at(index) - self.committed_kw_by_hour[index]
 
     def facility_kw(self, it_kw: float) -> float:
         return it_kw * self.pue
