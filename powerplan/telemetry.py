@@ -7,6 +7,8 @@ network. Stdlib only.
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass
 
 from .models import Fleet
@@ -100,3 +102,156 @@ def apply_dr(fleet: Fleet, events: list[DREvent]) -> None:
             current = limits[hour]
             if current is None or event.limit_kw < current:
                 limits[hour] = event.limit_kw
+
+
+# ---------------------------------------------------------------------------
+# GPU power readings (dcgm-exporter / Prometheus text exposition)
+# ---------------------------------------------------------------------------
+
+POWER = "DCGM_FI_DEV_POWER_USAGE"  # watts
+
+_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
+_LABEL_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+_ESCAPES = {'"': '"', "\\": "\\", "n": "\n"}
+
+
+def _skip_space(line: str, pos: int) -> int:
+    while pos < len(line) and line[pos] in " \t":
+        pos += 1
+    return pos
+
+
+def _parse_labels(line: str, pos: int) -> tuple[dict[str, str], int]:
+    """Parse a label set; `pos` is just after the opening brace.
+
+    Returns the labels and the position just after the closing brace.
+    """
+    labels: dict[str, str] = {}
+    n = len(line)
+    while True:
+        pos = _skip_space(line, pos)
+        if pos >= n:
+            raise ValueError("unterminated label set")
+        if line[pos] == "}":
+            return labels, pos + 1
+
+        match = _LABEL_RE.match(line, pos)
+        if not match:
+            raise ValueError("malformed labels")
+        name = match.group()
+        pos = _skip_space(line, match.end())
+        if pos >= n or line[pos] != "=":
+            raise ValueError(f"malformed labels: expected '=' after {name}")
+        pos = _skip_space(line, pos + 1)
+        if pos >= n or line[pos] != '"':
+            raise ValueError(f"malformed labels: value of {name} must be quoted")
+        pos += 1
+
+        chars: list[str] = []
+        while True:
+            if pos >= n:
+                raise ValueError(f"malformed labels: unterminated value of {name}")
+            char = line[pos]
+            if char == '"':
+                pos += 1
+                break
+            if char == "\\":
+                if pos + 1 >= n or line[pos + 1] not in _ESCAPES:
+                    raise ValueError(f"malformed labels: invalid escape in {name}")
+                chars.append(_ESCAPES[line[pos + 1]])
+                pos += 2
+            else:
+                chars.append(char)
+                pos += 1
+        labels[name] = "".join(chars)
+
+        pos = _skip_space(line, pos)
+        if pos < n and line[pos] == ",":
+            pos += 1
+        elif pos < n and line[pos] == "}":
+            pass
+        else:
+            raise ValueError("malformed labels")
+
+
+def _parse_sample(line: str) -> tuple[str, dict[str, str], float]:
+    match = _NAME_RE.match(line)
+    if not match:
+        raise ValueError("not a sample")
+    name = match.group()
+    pos = match.end()
+
+    labels: dict[str, str] = {}
+    if pos < len(line) and line[pos] == "{":
+        labels, pos = _parse_labels(line, pos + 1)
+
+    tokens = line[pos:].split()
+    if len(tokens) not in (1, 2):
+        raise ValueError("expected a value and an optional timestamp")
+    try:
+        value = float(tokens[0])
+    except ValueError:
+        raise ValueError(f"non-numeric value {tokens[0]!r}") from None
+    if len(tokens) == 2:
+        try:
+            int(tokens[1])
+        except ValueError:
+            raise ValueError(f"invalid timestamp {tokens[1]!r}") from None
+    return name, labels, value
+
+
+def parse_prometheus(text: str) -> list[tuple[str, dict[str, str], float]]:
+    """Parse Prometheus text exposition into ``(name, labels, value)`` tuples.
+
+    Blank lines and ``#`` comment lines are skipped; an optional integer
+    timestamp is ignored. Any other malformed line raises `ValueError`
+    containing ``line N`` (1-based).
+    """
+    samples = []
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            samples.append(_parse_sample(line))
+        except ValueError as exc:
+            raise ValueError(f"line {number}: {exc}") from None
+    return samples
+
+
+def gpu_it_kw_by_site(samples) -> dict[str, float]:
+    """Sum `POWER` samples per ``site`` label, in kW; other metrics are ignored.
+
+    A `POWER` sample without a ``site`` label, or with a non-finite value,
+    raises `ValueError`.
+    """
+    watts_by_site: dict[str, float] = {}
+    for name, labels, value in samples:
+        if name != POWER:
+            continue
+        site = labels.get("site")
+        if not site:
+            raise ValueError(f"{POWER} sample has no site label: {labels}")
+        if not math.isfinite(value):
+            raise ValueError(f"{POWER} sample for {site} is not finite: {value}")
+        watts_by_site[site] = watts_by_site.get(site, 0.0) + value
+    return {site: watts / 1000.0 for site, watts in watts_by_site.items()}
+
+
+def apply_gpu_power(fleet: Fleet, it_kw_by_site: dict[str, float]) -> None:
+    """Add measured GPU IT draw (as facility power) to each site's baseline load.
+
+    Each site's ``baseline_load_kw`` grows by ``kW * pue``. An unknown site
+    raises `ValueError` naming it, before the fleet is changed. GPU
+    availability is not changed (documented limitation).
+    """
+    sites = {}
+    for site_id in it_kw_by_site:
+        try:
+            sites[site_id] = fleet.site(site_id)
+        except KeyError:
+            raise ValueError(f"GPU power for unknown site {site_id}") from None
+
+    for site_id, it_kw in it_kw_by_site.items():
+        site = sites[site_id]
+        site.baseline_load_kw += it_kw * site.pue
