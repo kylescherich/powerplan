@@ -7,6 +7,9 @@ from powerplan.models import load_fleet, load_workloads
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 TOL = 1e-6
+# The oracle amounts are quoted to 4 decimals, so compare to within half a unit
+# in the last place.
+AMOUNT_TOL = 5e-5
 
 
 def real_data():
@@ -31,9 +34,9 @@ def test_carbon_cut_50_percent_is_feasible():
     assert result.weights["carbon"] == pytest.approx(0.35, abs=TOL)
     assert result.weights["runtime"] == pytest.approx(0.35, abs=TOL)
     assert result.distance == pytest.approx(0.3, abs=TOL)
-    assert result.baseline.total_carbon_kg == pytest.approx(5640.4916, abs=TOL)
-    assert result.proposed.total_carbon_kg == pytest.approx(2255.3593, abs=TOL)
-    assert result.proposed.total_cost == pytest.approx(1310.0439, abs=TOL)
+    assert result.baseline.total_carbon_kg == pytest.approx(5640.4916, abs=AMOUNT_TOL)
+    assert result.proposed.total_carbon_kg == pytest.approx(2255.3593, abs=AMOUNT_TOL)
+    assert result.proposed.total_cost == pytest.approx(1310.0439, abs=AMOUNT_TOL)
     assert result.moved == [
         ("W-001", ("SITE-TX", "tx-h100", 0), ("SITE-OR", "or-h100", 0)),
         ("W-003", ("SITE-OR", "or-h100", 10), ("SITE-EU", "eu-h100", 10)),
@@ -48,9 +51,9 @@ def test_cost_cut_15_percent_is_not_reachable():
     assert result.weights["carbon"] == pytest.approx(0.05, abs=TOL)
     assert result.weights["runtime"] == pytest.approx(0.05, abs=TOL)
     assert result.distance == pytest.approx(0.9, abs=TOL)
-    assert result.baseline.total_cost == pytest.approx(1127.8018, abs=TOL)
-    assert result.proposed.total_cost == pytest.approx(1110.158, abs=TOL)
-    assert result.proposed.total_carbon_kg == pytest.approx(6041.0721, abs=TOL)
+    assert result.baseline.total_cost == pytest.approx(1127.8018, abs=AMOUNT_TOL)
+    assert result.proposed.total_cost == pytest.approx(1110.158, abs=AMOUNT_TOL)
+    assert result.proposed.total_carbon_kg == pytest.approx(6041.0721, abs=AMOUNT_TOL)
 
 
 def test_zero_reduction_returns_the_base_weights():
@@ -70,7 +73,7 @@ def test_cost_cut_1_percent_is_feasible():
     assert result.weights["carbon"] == pytest.approx(0.00, abs=TOL)
     assert result.weights["runtime"] == pytest.approx(0.55, abs=TOL)
     assert result.distance == pytest.approx(0.5, abs=TOL)
-    assert result.proposed.total_cost == pytest.approx(1111.6261, abs=TOL)
+    assert result.proposed.total_cost == pytest.approx(1111.6261, abs=AMOUNT_TOL)
 
 
 def test_callers_fleet_is_unchanged_and_bad_arguments_raise():
