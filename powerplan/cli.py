@@ -15,6 +15,7 @@ from . import audit, explain, whatif
 from .engine import DEFAULT_WEIGHTS, plan as make_plan
 from .models import load_fleet, load_workloads
 from .optimal import SearchTooLarge, compare, format_gap
+from .trace import Tracer
 
 
 def _weights(args) -> dict:
@@ -49,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also compare the greedy plan against an exact optimum",
     )
+    p_plan.add_argument(
+        "--trace",
+        metavar="PATH",
+        help="write an OpenTelemetry-shaped span log (JSON lines) to PATH",
+    )
 
     p_what = sub.add_parser("whatif", help="perturb the fleet and diff the plan")
     _common(p_what)
@@ -69,7 +75,8 @@ def main(argv: list[str] | None = None) -> int:
     weights = _weights(args)
 
     if args.cmd == "plan":
-        result = make_plan(fleet, workloads, weights)
+        tracer = Tracer() if args.trace else None
+        result = make_plan(fleet, workloads, weights, tracer=tracer)
         print(explain.summarise(result))
         print()
         for p in result.placements:
@@ -77,15 +84,20 @@ def main(argv: list[str] | None = None) -> int:
             print()
         run_id = audit.record(result, fleet, workloads, args.audit)
         print(f"audit run_id {run_id} -> {args.audit}")
+        exit_code = 0
         if args.compare_optimal:
             try:
                 report = compare(fleet, workloads, weights)
             except SearchTooLarge as exc:
                 print(str(exc), file=sys.stderr)
-                return 3
-            print()
-            print(format_gap(report))
-        return 0
+                exit_code = 3
+            else:
+                print()
+                print(format_gap(report))
+        if tracer is not None:
+            count = tracer.to_jsonl(args.trace)
+            print(f"trace: {count} spans -> {args.trace}")
+        return exit_code
 
     # whatif
     perturbed = fleet

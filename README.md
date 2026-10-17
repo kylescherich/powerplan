@@ -12,6 +12,7 @@ Zero runtime dependencies (Python 3.11+, stdlib only). `pytest` for tests.
 python -m powerplan plan
 python -m powerplan plan --w-carbon 0.6 --w-cost 0.2 --w-runtime 0.2
 python -m powerplan plan --compare-optimal
+python -m powerplan plan --trace trace.jsonl
 python -m powerplan whatif --offline SITE-OR
 python -m powerplan whatif --curtail SITE-TX:0.45
 python -m powerplan whatif --degrade SITE-OR:or-mi300:64
@@ -117,6 +118,23 @@ explanation quantifies what the deferral saved or cost.
 Infeasible options are reported with the binding constraint, which is usually
 more useful than the winner.
 
+## Tracing
+
+`plan --trace PATH` writes a span log in JSON lines: one root span
+(`powerplan.plan`) and one span (`powerplan.place`) per placement decision,
+each with the chosen site, start hour and runner-up margin. It is written after
+the normal output, and the last stdout line reports the count:
+
+```bash
+python -m powerplan plan --trace trace.jsonl
+# ...
+# trace: 7 spans -> trace.jsonl
+```
+
+Without `--trace` nothing is traced and no file is written. `whatif` is not
+traced. The spans are plain dicts shaped like OpenTelemetry spans; no
+OpenTelemetry package or exporter is used.
+
 ## Failure and curtailment
 
 `whatif` deep-copies the fleet, applies a perturbation (site outage, grid
@@ -139,6 +157,7 @@ powerplan/optimal.py   exact reference search and greedy-gap report
 powerplan/explain.py   tradeoff narration
 powerplan/whatif.py    perturbations and plan diffing
 powerplan/audit.py     append-only decision log
+powerplan/trace.py     stdlib span log (OpenTelemetry-shaped, no exporter)
 data/                  sample 3-site fleet, 6-workload queue
 tests/                 constraint, sensitivity and audit tests
 ```
@@ -150,7 +169,10 @@ tests/                 constraint, sensitivity and audit tests
 2. ~~Report the greedy gap against an exact optimum.~~ **Done** as a stdlib
    exact search for small fleets (`plan --compare-optimal`); a MILP / CP-SAT
    solver is the step when fleets outgrow it.
-3. OpenTelemetry spans per placement decision → real observability, not prints.
+3. ~~OpenTelemetry spans per placement decision → real observability, not prints.~~
+   **Done** as an OpenTelemetry-shaped span log in JSON lines (`plan --trace`),
+   with no exporter and no OpenTelemetry package; mapping to OTLP is the later
+   step.
 4. Ingest live telemetry (DCGM power draw, utility demand-response signals)
    instead of static JSON.
 5. An agent layer that takes "cut next month's energy bill 15% without missing a
