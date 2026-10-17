@@ -1,0 +1,5 @@
+{
+  "events": [
+    {"site_id": "SITE-OR", "start_hour": 8, "end_hour": 16, "limit_kw": 650}
+  ]
+}

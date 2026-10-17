@@ -103,6 +103,13 @@ exists so W-004 has exactly one feasible home. That last one is intentional: it
 makes `whatif --offline SITE-OR` drop a workload and expose a single-vendor
 dependency, which is the best demo in the repo.
 
+**Telemetry is replayed from files, not polled.** `plan --telemetry DIR`
+replays dcgm-exporter power readings (`DIR/dcgm.prom`) and demand-response
+events (`DIR/dr_events.json`) onto the fleet before planning. The sample
+telemetry in `examples/telemetry/` is synthetic too. GPU availability is not
+taken from telemetry (only measured power is added to a site's baseline load),
+and there is no live polling.
+
 **Time is modelled within one day only.** Jobs now have start hours, and power
 is checked per hour of each job's window. There is still no queueing beyond the
 24-hour window and no preemption, and `makespan` is the latest start plus
@@ -145,8 +152,9 @@ is the later step. `whatif` is not traced.
 3. ~~OpenTelemetry spans per decision.~~ **Done** as a stdlib,
    OpenTelemetry-shaped span log (`plan --trace`); no exporter, and mapping to
    OTLP is the later step.
-4. Live telemetry ingest (DCGM power draw, utility demand-response signals) in
-   place of static JSON.
+4. ~~Live telemetry ingest (DCGM power draw, utility demand-response signals) in
+   place of static JSON.~~ **Done** as replay: `plan --telemetry DIR` reads
+   dcgm-exporter text and demand-response events from files; no live polling.
 5. An agent layer that takes a goal like "cut next month's energy bill 15%
    without missing a deadline", proposes weight changes, and shows the diff for
    human approval.

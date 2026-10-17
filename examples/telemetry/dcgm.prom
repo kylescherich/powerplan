@@ -1,0 +1,8 @@
+# HELP DCGM_FI_DEV_POWER_USAGE Power draw (in W).
+# TYPE DCGM_FI_DEV_POWER_USAGE gauge
+DCGM_FI_DEV_POWER_USAGE{gpu="0",UUID="GPU-0a1b2c3d-0000-0000-0000-000000000001",device="nvidia0",modelName="NVIDIA H100 80GB HBM3",Hostname="tx-node-01",site="SITE-TX",pool="tx-h100"} 612.5
+DCGM_FI_DEV_POWER_USAGE{gpu="1",UUID="GPU-0a1b2c3d-0000-0000-0000-000000000002",device="nvidia1",modelName="NVIDIA H100 80GB HBM3",Hostname="tx-node-01",site="SITE-TX",pool="tx-h100"} 587.5
+DCGM_FI_DEV_POWER_USAGE{gpu="0",UUID="GPU-0a1b2c3d-0000-0000-0000-000000000003",device="nvidia0",modelName="NVIDIA H100 80GB HBM3",Hostname="or-node-07",site="SITE-OR",pool="or-h100"} 400 1792195200000
+# HELP DCGM_FI_DEV_GPU_TEMP GPU temperature (in C).
+# TYPE DCGM_FI_DEV_GPU_TEMP gauge
+DCGM_FI_DEV_GPU_TEMP{gpu="0",UUID="GPU-0a1b2c3d-0000-0000-0000-000000000001",Hostname="tx-node-01",site="SITE-TX",pool="tx-h100"} 61

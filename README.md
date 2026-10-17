@@ -13,6 +13,7 @@ python -m powerplan plan
 python -m powerplan plan --w-carbon 0.6 --w-cost 0.2 --w-runtime 0.2
 python -m powerplan plan --compare-optimal
 python -m powerplan plan --trace trace.jsonl
+python -m powerplan plan --telemetry examples/telemetry
 python -m powerplan whatif --offline SITE-OR
 python -m powerplan whatif --curtail SITE-TX:0.45
 python -m powerplan whatif --degrade SITE-OR:or-mi300:64
@@ -135,6 +136,43 @@ Without `--trace` nothing is traced and no file is written. `whatif` is not
 traced. The spans are plain dicts shaped like OpenTelemetry spans; no
 OpenTelemetry package or exporter is used.
 
+## Replayed telemetry
+
+`plan --telemetry DIR` replays telemetry snapshot files before planning. It
+reads `DIR/dcgm.prom` and `DIR/dr_events.json`, whichever exist; if neither
+exists it prints `no telemetry files in DIR` to stderr and exits with code 2.
+GPU power is applied first, then demand-response limits, so the plan,
+`--compare-optimal`, `--trace` and the audit record all see the adjusted fleet.
+The first stdout line reports what was read:
+
+```bash
+python -m powerplan plan --telemetry examples/telemetry
+# telemetry: 3 GPU power samples, 1 demand-response events
+# ...
+```
+
+**`dcgm.prom`** is the text format NVIDIA's dcgm-exporter serves (Prometheus
+exposition): `name{label="value",...} value [timestamp]`. Blank lines and `#`
+lines are skipped, and the optional timestamp is ignored. Samples of
+`DCGM_FI_DEV_POWER_USAGE` (watts) are summed per site and added to that site's
+baseline load as `kW × PUE`. **Every power sample needs a `site` label** (real
+dcgm-exporter output gets it from the scrape config); other metrics are
+ignored. GPU availability is not taken from telemetry.
+
+**`dr_events.json`** holds utility demand-response limits:
+
+```json
+{"events": [{"site_id": "SITE-OR", "start_hour": 8, "end_hour": 16, "limit_kw": 650}]}
+```
+
+The site may draw at most `limit_kw` during hours `[start_hour, end_hour)`
+(end exclusive). Where events overlap the lower limit wins, and a limit above
+the site's capacity does not raise the ceiling. Both the greedy plan and the
+exact search respect it.
+
+The samples in `examples/telemetry/` are synthetic. Nothing is polled over the
+network; the files are replayed from disk.
+
 ## Failure and curtailment
 
 `whatif` deep-copies the fleet, applies a perturbation (site outage, grid
@@ -158,6 +196,7 @@ powerplan/explain.py   tradeoff narration
 powerplan/whatif.py    perturbations and plan diffing
 powerplan/audit.py     append-only decision log
 powerplan/trace.py     stdlib span log (OpenTelemetry-shaped, no exporter)
+powerplan/telemetry.py replayed demand-response events and dcgm-exporter power
 data/                  sample 3-site fleet, 6-workload queue
 tests/                 constraint, sensitivity and audit tests
 ```
@@ -173,7 +212,10 @@ tests/                 constraint, sensitivity and audit tests
    **Done** as an OpenTelemetry-shaped span log in JSON lines (`plan --trace`),
    with no exporter and no OpenTelemetry package; mapping to OTLP is the later
    step.
-4. Ingest live telemetry (DCGM power draw, utility demand-response signals)
-   instead of static JSON.
+4. ~~Ingest live telemetry (DCGM power draw, utility demand-response signals)
+   instead of static JSON.~~ **Done** as replay: `plan --telemetry DIR` reads
+   telemetry files in real formats (dcgm-exporter text, demand-response
+   events) with synthetic samples and no network polling; live polling is the
+   later step.
 5. An agent layer that takes "cut next month's energy bill 15% without missing a
    deadline", proposes weight changes, and shows the diff for human approval.

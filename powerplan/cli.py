@@ -4,17 +4,27 @@
     python -m powerplan whatif --fleet data/fleet.json --workloads data/workloads.json \
         --offline SITE-TX
     python -m powerplan whatif --curtail SITE-TX:0.4
+    python -m powerplan plan   --telemetry examples/telemetry
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import audit, explain, whatif
 from .engine import DEFAULT_WEIGHTS, plan as make_plan
-from .models import load_fleet, load_workloads
+from .models import Fleet, load_fleet, load_workloads
 from .optimal import SearchTooLarge, compare, format_gap
+from .telemetry import (
+    POWER,
+    apply_dr,
+    apply_gpu_power,
+    gpu_it_kw_by_site,
+    parse_dr_events,
+    parse_prometheus,
+)
 from .trace import Tracer
 
 
@@ -28,6 +38,36 @@ def _weights(args) -> dict:
         w["runtime"] = args.w_runtime
     total = sum(w.values())
     return {k: v / total for k, v in w.items()}
+
+
+def _apply_telemetry(fleet: Fleet, directory: str) -> str | None:
+    """Replay `dcgm.prom` and `dr_events.json` from `directory` onto `fleet`.
+
+    GPU power is applied first, then demand-response limits. Returns the
+    summary line, or None when neither file exists. Malformed files raise
+    `ValueError`.
+    """
+    base = Path(directory)
+    prom = base / "dcgm.prom"
+    dr = base / "dr_events.json"
+    if not prom.is_file() and not dr.is_file():
+        return None
+
+    samples = []
+    events = []
+    if prom.is_file():
+        samples = parse_prometheus(prom.read_text())
+    if dr.is_file():
+        events = parse_dr_events(dr.read_text())
+
+    apply_gpu_power(fleet, gpu_it_kw_by_site(samples))
+    apply_dr(fleet, events)
+
+    power_samples = sum(1 for name, _, _ in samples if name == POWER)
+    return (
+        f"telemetry: {power_samples} GPU power samples, "
+        f"{len(events)} demand-response events"
+    )
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -55,6 +95,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="write an OpenTelemetry-shaped span log (JSON lines) to PATH",
     )
+    p_plan.add_argument(
+        "--telemetry",
+        metavar="DIR",
+        help="replay DIR/dcgm.prom (GPU power) and DIR/dr_events.json "
+        "(demand-response limits) before planning",
+    )
 
     p_what = sub.add_parser("whatif", help="perturb the fleet and diff the plan")
     _common(p_what)
@@ -75,6 +121,16 @@ def main(argv: list[str] | None = None) -> int:
     weights = _weights(args)
 
     if args.cmd == "plan":
+        if args.telemetry:
+            try:
+                summary = _apply_telemetry(fleet, args.telemetry)
+            except ValueError as exc:
+                print(f"telemetry error: {exc}", file=sys.stderr)
+                return 2
+            if summary is None:
+                print(f"no telemetry files in {args.telemetry}", file=sys.stderr)
+                return 2
+            print(summary)
         tracer = Tracer() if args.trace else None
         result = make_plan(fleet, workloads, weights, tracer=tracer)
         print(explain.summarise(result))
