@@ -14,6 +14,7 @@ python -m powerplan plan --w-carbon 0.6 --w-cost 0.2 --w-runtime 0.2
 python -m powerplan plan --compare-optimal
 python -m powerplan plan --trace trace.jsonl
 python -m powerplan plan --telemetry examples/telemetry
+python -m powerplan advise --goal carbon:50
 python -m powerplan whatif --offline SITE-OR
 python -m powerplan whatif --curtail SITE-TX:0.45
 python -m powerplan whatif --degrade SITE-OR:or-mi300:64
@@ -173,6 +174,33 @@ exact search respect it.
 The samples in `examples/telemetry/` are synthetic. Nothing is polled over the
 network; the files are replayed from disk.
 
+## Advising on weights
+
+`advise --goal METRIC:PERCENT` takes a goal such as `carbon:50` or `cost:15%`
+and proposes objective weights that meet it, showing what would change. It is a
+deterministic search over a fixed grid of weights (steps of 0.05, summing to 1):
+no language model, no randomness. It proposes and never applies; it prints the
+exact `plan` flags to run and a person decides. It also never trades away
+placed work: a weight set is only considered if it places the same number of
+workloads at each priority as the current weights do. No audit record is
+written.
+
+```bash
+python -m powerplan advise --goal carbon:50
+# goal: cut carbon by 50% (baseline 5,640 kg CO2e)
+# proposal: cost 0.30, carbon 0.35, runtime 0.35 (distance 0.30 from current weights)
+# result: carbon 2,255 kg CO2e (-60.0%), cost $1,310 (+16.2%)
+# moved: W-001 SITE-TX/tx-h100@0 -> SITE-OR/or-h100@0
+# moved: W-003 SITE-OR/or-h100@10 -> SITE-EU/eu-h100@10
+# moved: W-005 SITE-OR/or-h100@8 -> SITE-TX/tx-h100@10
+# to apply: python -m powerplan plan --w-cost 0.30 --w-carbon 0.35 --w-runtime 0.35
+```
+
+The `--w-*` options set the current (base) weights. Exit code 0 means the goal
+is reachable; 1 means it is not, and the closest proposal is shown instead
+(`not reachable without placing less work; closest: ...`); 2 means the goal
+was malformed.
+
 ## Failure and curtailment
 
 `whatif` deep-copies the fleet, applies a perturbation (site outage, grid
@@ -192,6 +220,7 @@ same weights means the plan is reproducible.
 powerplan/models.py    domain types, JSON loading, power math
 powerplan/engine.py    feasibility, scoring, greedy assignment
 powerplan/optimal.py   exact reference search and greedy-gap report
+powerplan/advisor.py   weight search for a goal (proposes, never applies)
 powerplan/explain.py   tradeoff narration
 powerplan/whatif.py    perturbations and plan diffing
 powerplan/audit.py     append-only decision log
@@ -217,5 +246,8 @@ tests/                 constraint, sensitivity and audit tests
    telemetry files in real formats (dcgm-exporter text, demand-response
    events) with synthetic samples and no network polling; live polling is the
    later step.
-5. An agent layer that takes "cut next month's energy bill 15% without missing a
-   deadline", proposes weight changes, and shows the diff for human approval.
+5. ~~An agent layer that takes "cut next month's energy bill 15% without missing a
+   deadline", proposes weight changes, and shows the diff for human approval.~~
+   **Done** as a deterministic weight search (`advise --goal`) that proposes and
+   never applies; a person approves and runs the printed `plan` command. No
+   language model is involved.

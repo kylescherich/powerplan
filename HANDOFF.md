@@ -155,6 +155,10 @@ is the later step. `whatif` is not traced.
 4. ~~Live telemetry ingest (DCGM power draw, utility demand-response signals) in
    place of static JSON.~~ **Done** as replay: `plan --telemetry DIR` reads
    dcgm-exporter text and demand-response events from files; no live polling.
-5. An agent layer that takes a goal like "cut next month's energy bill 15%
+5. ~~An agent layer that takes a goal like "cut next month's energy bill 15%
    without missing a deadline", proposes weight changes, and shows the diff for
-   human approval.
+   human approval.~~ **Done** as a deterministic, stdlib weight search
+   (`advise --goal`, `powerplan/advisor.py`): no language model, nothing is
+   auto-applied, and the command prints the `plan` flags for a person to run.
+   The advisor searches a fixed 0.05 weight grid and never trades away placed
+   work.
